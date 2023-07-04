@@ -3,16 +3,46 @@
 //
 
 #include "utils.h"
-#include "opencv2/dnn/dnn.hpp"
 
 #include <boost/process.hpp>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <opencv2/cudaarithm.hpp>
-#include <opencv2/cudafilters.hpp>
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/cudawarping.hpp>
 #include <stack>
+#include <torch/script.h>
+#include <torch_tensorrt/logging.h>
+#include <torch_tensorrt/torch_tensorrt.h>
+
+Classifier::Classifier() {
+  try {
+    torch_tensorrt::logging::set_reportable_log_level(torch_tensorrt::logging::kERROR);
+    classificationModule = torch::jit::load("classify.torchscript", torch::kCUDA);
+    //classificationModule = torch::jit::load("../models/best.torchscript", torch::kCUDA);
+    classificationModule.to(torch::kFloat);
+    classificationModule.eval();
+
+    //TODO: DEBUG GENERATE TORCH-TENSORRT
+    /*std::vector<int64_t> dims = {1, 3, 640, 640};
+    auto input = torch_tensorrt::Input(dims, torch::kFloat);
+    auto compile_settings = torch_tensorrt::ts::CompileSpec({input});
+    compile_settings.enabled_precisions = {torch::kFloat};
+    compile_settings.truncate_long_and_double = true;
+    classificationModule = torch_tensorrt::ts::compile(classificationModule, compile_settings);
+    classificationModule.save("../models/classify.torchscript");*/
+  } catch (const torch::Error &e) {
+    std::cerr << "Error loading classification model" << std::endl;
+    exit(READ_ERROR);
+  }
+}
+
+torch::Tensor Classifier::forward(const torch::Tensor &input) {
+  torch::Tensor pT = classificationModule.forward({input}).toTensor();
+  torch::Tensor score = std::get<0>(pT.slice(1, 4, -1).max(1, true));
+  return torch::cat({pT.slice(1, 0, 4), score, pT.slice(1, 4, -1)}, 1).permute({0, 2, 1});
+}
 
 ImageUtils::~ImageUtils() {
   cropped.release();
@@ -140,15 +170,15 @@ std::map<cv::Rect, ImageType, RectComparator> ImageUtils::getImageBlocks(const c
   //(left, top, right, bottom, confidence, type)
   //cv::Mat test(pixels);//TODO: COMMENT OUT AFTER TESTING
   for (int i = 0; i < output.size(0); ++i) {
-    int left = clamp((int)round(output[i][0].item<float>() * scaleX), 0, 640);
-    int top = clamp((int)round(output[i][1].item<float>() * scaleY), 0, 640);
-    int right = clamp((int)round(output[i][2].item<float>() * scaleX), 0, 640);
-    int bottom = clamp((int)round(output[i][3].item<float>() * scaleY), 0, 640);
+    int left = clamp((int) round(output[i][0].item<float>() * scaleX), 0, 640);
+    int top = clamp((int) round(output[i][1].item<float>() * scaleY), 0, 640);
+    int right = clamp((int) round(output[i][2].item<float>() * scaleX), 0, 640);
+    int bottom = clamp((int) round(output[i][3].item<float>() * scaleY), 0, 640);
     cv::Rect rect(cv::Point(left, top), cv::Point(right, bottom));
     //cv::rectangle(test, rect, cv::Scalar(255, 255, 255));//TODO: COMMENT OUT AFTER TESTING
     std::pair<cv::Rect, ImageType> pair = std::make_pair(rect, static_cast<ImageType>(output[i][5].item<int>()));
-    if(rect.area())
-     imageBlocks.emplace(pair);
+    if (rect.area())
+      imageBlocks.emplace(pair);
   }
   return imageBlocks;
 }
@@ -196,7 +226,7 @@ void ImageUtils::denoise(cv::cuda::GpuMat &pixels) {
   denoiseFilter->apply(pixels, pixels);
 }
 
-void ImageUtils::crop(cv::cuda::GpuMat &pixels) {
+void ImageUtils::crop(cv::cuda::GpuMat &pixels) {// NOLINT(readability-convert-member-functions-to-static)
   cv::Mat pixelsMat(pixels);
   cv::Mat nonZeroMat;
   cv::findNonZero(pixelsMat, nonZeroMat);
@@ -211,25 +241,32 @@ void ImageUtils::threshold(cv::cuda::GpuMat &pixels) {
   cv::cuda::compare(pixels, mean, pixels, cv::CMP_LE);
 }
 
-void ImageUtils::equalize(cv::cuda::GpuMat &pixels) {
+void ImageUtils::equalize(cv::cuda::GpuMat &pixels) {// NOLINT(readability-convert-member-functions-to-static)
   cv::cuda::equalizeHist(pixels, pixels);
 }
 
-void getPDFImages(const std::string &inputFilePath, const std::string &outputFilePath, OCREngine &ocr, ImageUtils& imgUtils, const std::function<std::string(OCREngine &, ImageUtils&, cv::cuda::GpuMat &, const std::string &)> &callback) {
+void getPDFImages(const std::string &inputFilePath, const std::string &outputFilePath, const std::variant<std::function<std::string(cv::cuda::GpuMat &)>, std::function<void(cv::cuda::GpuMat &, const std::string &)>> &callback) {
   if (!fileExists(inputFilePath.c_str())) {
     std::cerr << "Input PDF does not exist" << std::endl;
     exit(INVALID_PARAMETER);
   }
   if (!isDir(outputFilePath.c_str()))
-    boost::filesystem::create_directory(outputFilePath.c_str());
+    std::filesystem::create_directory(outputFilePath.c_str());
   size_t start = inputFilePath.rfind('/');
   size_t end = inputFilePath.rfind('.');
   std::string fileName = inputFilePath.substr(start + 1, end - start - 1);
   std::string outputPrefix = outputFilePath;
   outputPrefix += "/pageImgs";
   if (!isDir(outputPrefix.c_str()))
-    boost::filesystem::create_directory(outputPrefix.c_str());
+    std::filesystem::create_directory(outputPrefix.c_str());
   outputPrefix += '/' + fileName;
+
+  CallbackType callbackType;
+  if (std::holds_alternative<std::function<std::string(cv::cuda::GpuMat &)>>(callback))
+    callbackType = LATEX;
+  else
+    callbackType = PROCESS;
+
   boost::process::ipstream pageCountIn;
   boost::process::child ghostscriptPageCount("ghostscript -q -dNODISPLAY --permit-file-read=" + inputFilePath + " -c \"(" + inputFilePath + ") (r) file runpdfbegin pdfpagecount = quit\"",
                                              boost::process::std_out > pageCountIn);
@@ -249,8 +286,11 @@ void getPDFImages(const std::string &inputFilePath, const std::string &outputFil
       std::cerr << "Failed to read image file(" << imgPath << ") into cv::Mat" << std::endl;
       exit(ALLOC_ERROR);
     }
-    //TODO:ADD NEWPAGE COMMAND
-    latexEncoding += callback(ocr, imgUtils, curImg, imgPath.substr(0, imgPath.size() - 5));
+    //TODO:ADD NEWPAGE COMMAND AND HANDLE OUTPUT
+    if (callbackType == LATEX)
+      latexEncoding += std::get<std::function<std::string(cv::cuda::GpuMat &)>>(callback)(curImg);
+    else
+      std::get<std::function<void(cv::cuda::GpuMat &, const std::string &)>>(callback)(curImg, outputPrefix + "_page" + std::to_string(i) + ".png");
   }
   //BENCHMARK
   //std::cout << (std::chrono::high_resolution_clock::now() - startTime).count() << std::endl;
@@ -260,7 +300,7 @@ void getPDFImages(const std::string &inputFilePath, const std::string &outputFil
     std::cerr << "Ghostscript was unable to parse images from the pdf" << std::endl;
     exit(returnCode);
   }
-  boost::filesystem::remove_all(outputFilePath + "/pageImgs");
+  std::filesystem::remove_all(outputFilePath + "/pageImgs");
 }
 
 void printHelp() {

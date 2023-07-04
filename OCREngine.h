@@ -5,25 +5,14 @@
 #ifndef MATHOCR_OCRENGINE_H
 #define MATHOCR_OCRENGINE_H
 
-#include <opencv2/core/mat.hpp>
 #include <string>
 
+#include <opencv2/core/cuda.hpp>
 #include <torch/torch.h>
 
 extern const int INVALID_PARAMETER;
 extern const int READ_ERROR;
 extern const int PROCESSING_ERROR;
-
-enum LatexTokens {
-
-};
-
-enum ImageType {
-  TEXT = 0,
-  MATH = 1,
-  IMAGE = 2,
-  TABLE = 3
-};
 
 class DataSet : public torch::data::datasets::Dataset<DataSet> {
 public:
@@ -39,46 +28,29 @@ private:
   bool training;
 };
 
-class Classifier {
-public:
-  Classifier();
-  torch::Tensor forward(const torch::Tensor &input);
-private:
-  torch::jit::script::Module classificationModule;
-};
-
 //VGG16 + 2D Positional Encoding
-class Encoding : public torch::nn::Module {
+class Encoder : public torch::nn::Module {
 public:
-  Encoding() = default;
-  Encoding(int64_t d_model, int64_t width, int64_t height);
+  Encoder(int d_model, int width, int height);
   torch::Tensor forward(torch::Tensor input);
 
 private:
-  torch::nn::Conv2d conv1_1{nullptr};
-  torch::nn::Conv2d conv1_2{nullptr};
-  torch::nn::Conv2d conv2_1{nullptr};
-  torch::nn::Conv2d conv2_2{nullptr};
-  torch::nn::Conv2d conv3_1{nullptr};
-  torch::nn::Conv2d conv3_2{nullptr};
-  torch::nn::Conv2d conv3_3{nullptr};
-  torch::nn::Conv2d conv4_1{nullptr};
-  torch::nn::Conv2d conv4_2{nullptr};
-  torch::nn::Conv2d conv4_3{nullptr};
-  torch::nn::Conv2d conv5_1{nullptr};
-  torch::nn::Conv2d conv5_2{nullptr};
-  torch::nn::Conv2d conv5_3{nullptr};
-  torch::nn::Linear fc1{nullptr};
-  torch::nn::Linear fc2{nullptr};
-  torch::nn::Linear fc3{nullptr};
-
+  torch::nn::Sequential cnn;
   torch::Tensor positionalEncoding;
+};
+
+class Decoder : public torch::nn::Module {
+public:
+  Decoder(int64_t inputSize, int64_t hiddenSize, int64_t numLayers, int64_t numClasses);
+  torch::Tensor forward(torch::Tensor input);
+private:
+  torch::nn::LSTM lstm;
+  torch::nn::Linear fc;
 };
 
 class OCREngine : public torch::nn::Module {
 public:
   OCREngine();
-  OCREngine(const OCREngine &ocr) {}
   explicit OCREngine(const std::string &modelPath);
   torch::Tensor forward(torch::Tensor input);
 
@@ -86,12 +58,10 @@ public:
   void test(const std::string &dataDirectory);
   void exportWeights(const std::string &outputPath);
 
-  std::string toLatex(const cv::cuda::GpuMat &pixels, const ImageType &type);
+  std::string toLatex(const cv::cuda::GpuMat &pixels);
 
 private:
-  Encoding encoder;
-  //torch::nn::LSTM attention;
-  //torch::nn::LSTM decoder;
+  torch::nn::Sequential model;
 };
 
 #endif//MATHOCR_OCRENGINE_H

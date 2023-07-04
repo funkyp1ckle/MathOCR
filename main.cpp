@@ -1,8 +1,6 @@
-#include <boost/filesystem/convenience.hpp>
+#include <filesystem>
 #include <iostream>
-#include <opencv2/opencv.hpp>
 
-#include "opencv2/cudawarping.hpp"
 #include "utils.h"
 
 const int INVALID_PARAMETER_COUNT = 1;
@@ -15,24 +13,34 @@ const std::string VERSION = "0.1";
 
 Options settings;
 
-std::string imgToLatex(OCREngine &ocr, ImageUtils& imgUtils, cv::cuda::GpuMat &pixels, const std::string &outputPrefix) {
-  imgUtils.equalize(pixels);
-  imgUtils.threshold(pixels);
-  imgUtils.denoise(pixels);
-  imgUtils.crop(pixels);
-  std::map<cv::Rect, ImageType, RectComparator> imageBlocks = imgUtils.getImageBlocks(pixels);
-  float skewSum = 0;
-  for (auto itr = imageBlocks.begin(); itr != imageBlocks.end(); ++itr)
-    skewSum += imgUtils.getSkewAngle(pixels(itr->first), itr->second);
-  imgUtils.rotate(pixels, skewSum / (float) imageBlocks.size());
-  std::string latexStr;
-  for(std::pair<cv::Rect, ImageType> img : imageBlocks) {
-    std::string latexLine = ocr.toLatex(pixels(img.first), img.second);
-    //TODO: ADD POSITIONING INFO
-    latexStr += latexLine;
+void preprocess(cv::cuda::GpuMat &pixels, bool deskew) {
+  ImageUtils::equalize(pixels);
+  ImageUtils::threshold(pixels);
+  ImageUtils::denoise(pixels);
+  ImageUtils::crop(pixels);
+  if (deskew) {
+    std::map<cv::Rect, ImageType, RectComparator> imageBlocks = ImageUtils::getImageBlocks(pixels);
+    float skewSum = 0;
+    for (auto itr = imageBlocks.begin(); itr != imageBlocks.end(); ++itr)
+      skewSum += ImageUtils::getSkewAngle(pixels(itr->first), itr->second);
+    ImageUtils::rotate(pixels, skewSum / (float) imageBlocks.size());
   }
+}
+
+void preprocess(cv::cuda::GpuMat &pixels, bool deskew, const std::string &outputPath) {
+  preprocess(pixels, deskew);
+  cv::Mat out(pixels);
+  cv::imwrite(outputPath, out);
+}
+
+std::string imgToLatex(cv::cuda::GpuMat &pixels, OCREngine &ocr) {
+  preprocess(pixels, true);
+  return ocr.toLatex(pixels);
+}
+
+void imgToLatex(cv::cuda::GpuMat &pixels, OCREngine &ocr, const std::string &outputPrefix) {
+  std::string output = imgToLatex(pixels, ocr);
   //TODO: ADD OUTPUT HANDLING
-  return latexStr;
 }
 
 int main(int argc, char **argv) {
@@ -62,6 +70,13 @@ int main(int argc, char **argv) {
     unsigned long epoch = std::stoul(argv[3]);
     float learningRate = std::stof(argv[4]);
     ocr.train(dataDirectory, epoch, learningRate);
+  } else if (argOne == "preprocess") {
+    std::string inputFilePath(argv[2]);
+    std::string outputDirectory(argv[3]);
+    bool deskew = std::stoi(argv[4]) != 0;
+
+    std::function<void(cv::cuda::GpuMat &, const std::string &)> bindedCallback = std::bind(static_cast<void(&)(cv::cuda::GpuMat &, bool, const std::string &)>(preprocess), std::placeholders::_1, deskew, std::placeholders::_2);
+    getPDFImages(inputFilePath, outputDirectory, bindedCallback);
   } else {
     if (argc < 3) {
       std::cerr << "There are not enough parameters supplied, use -help for usage" << std::endl;
@@ -78,12 +93,13 @@ int main(int argc, char **argv) {
     ocr.to(torch::kCUDA);
     ImageUtils imgUtils;
     if (inputFileEnding == "pdf") {
-      getPDFImages(inputFilePath, outputDirectory, ocr, imgUtils, imgToLatex);
+      std::function<std::string(cv::cuda::GpuMat &)> bindedCallback = std::bind(static_cast<std::string(&)(cv::cuda::GpuMat &, OCREngine&)>(imgToLatex), std::placeholders::_1, ocr);
+      getPDFImages(inputFilePath, outputDirectory, bindedCallback);
     } else if (inputFileEnding != "jpeg" && inputFileEnding != "jpg" && inputFileEnding != "png") {
       std::cerr << "invalid input format" << std::endl;
       exit(INVALID_PARAMETER);
     } else {
-      boost::filesystem::copy_file(inputFilePath, outputDirectory, boost::filesystem::copy_options::overwrite_existing);
+      std::filesystem::copy_file(inputFilePath, outputDirectory, std::filesystem::copy_options::overwrite_existing);
       outputDirectory += "/";
       std::string imgPath = outputDirectory;
       imgPath += inputFilePath.substr(slashIdx + 1);
@@ -95,7 +111,7 @@ int main(int argc, char **argv) {
       }
       std::string outputPrefix = outputDirectory;
       outputPrefix += inputFilePath.substr(slashIdx + 1, dotIdx - slashIdx - 1);
-      std::string latexEncoding = imgToLatex(ocr, imgUtils, img, outputPrefix);
+      imgToLatex(img, ocr, outputPrefix);
     }
   }
   return 0;

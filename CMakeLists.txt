@@ -4,11 +4,10 @@ project(MathOCR)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
-set(Boost_NO_WARN_NEW_VERSIONS 1)
 set(CAFFE2_USE_CUDNN 1)
 
 find_package(OpenCV 4.6.0 REQUIRED)
-find_package(Boost 1.82.0 REQUIRED filesystem COMPONENTS)
+find_package(Boost 1.82.0 COMPONENTS filesystem REQUIRED) # try to remove
 find_package(Torch REQUIRED)
 list(APPEND CMAKE_CXX_FLAGS ${TORCH_CXX_FLAGS})
 
@@ -106,7 +105,7 @@ endif()
 
 add_executable(MathOCR main.cpp latexpp/latex.cpp utils.cpp OCREngine.cpp)
 target_include_directories(MathOCR PUBLIC ${OpenCV_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS} ${V8_ROOT} ${V8_ROOT}/include ${WKHTMLTOX_ROOT}/include)
-target_compile_definitions(MathOCR PUBLIC V8_ENABLE_SANDBOX V8_COMPRESS_POINTERS _WIN32_WINNT=0x0601) #_ITERATOR_DEBUG_LEVEL=0
+target_compile_definitions(MathOCR PUBLIC V8_ENABLE_SANDBOX V8_COMPRESS_POINTERS _WIN32_WINNT=0x0601)
 target_link_libraries(MathOCR PUBLIC ${TORCH_LIBRARIES} ${Boost_LIBRARIES} ${OpenCV_LINK_LIBRARIES} ${V8_LINK_LIBRARIES} ${WKHTMLTOX_LIBRARIES})
 
 add_custom_command(TARGET MathOCR POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different

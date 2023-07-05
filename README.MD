@@ -1,5 +1,7 @@
 # MathOCR
-## Converts PDFs and images into tex
+[![GitHub license](https://img.shields.io/github/license/mashape/apistatus.svg?style=flat-square)](http://goldsborough.mit-license.org)
+
+Converts PDFs and images into tex
 
 ### Dependencies
 - [CUDA](https://developer.nvidia.com/cuda-downloads)

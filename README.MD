@@ -13,6 +13,7 @@ Converts PDFs and images into tex
 - [Ghostscript](https://ghostscript.com/releases/gsdnld.html)
 - [Latexpp (Katex)](https://github.com/goldsborough/latexpp)
 - [v8 JS Engine](https://github.com/v8/v8)
+- [wkhtmltox](https://wkhtmltopdf.org/downloads.html)
 
 ### Models
 - [YoloV8](https://github.com/ultralytics/ultralytics) - deskew

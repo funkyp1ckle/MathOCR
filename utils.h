@@ -89,6 +89,10 @@ private:
   static inline cv::cuda::GpuMat resized;
 };
 
+torch::Tensor toTensor(const std::vector<std::string>& strs);
+
+std::vector<std::string> toString(const torch::Tensor& tensor);
+
 void printHelp();
 
 int clamp(int n, int lower, int upper);

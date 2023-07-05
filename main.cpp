@@ -74,9 +74,17 @@ int main(int argc, char **argv) {
     std::string inputFilePath(argv[2]);
     std::string outputDirectory(argv[3]);
     bool deskew = std::stoi(argv[4]) != 0;
-
-    std::function<void(cv::cuda::GpuMat &, const std::string &)> bindedCallback = std::bind(static_cast<void(&)(cv::cuda::GpuMat &, bool, const std::string &)>(preprocess), std::placeholders::_1, deskew, std::placeholders::_2);
-    getPDFImages(inputFilePath, outputDirectory, bindedCallback);
+    std::string fileType = inputFilePath.substr(inputFilePath.rfind(".") + 1);
+    if(fileType == "pdf") {
+      std::function<void(cv::cuda::GpuMat &, const std::string &)> bindedCallback = std::bind(static_cast<void(&)(cv::cuda::GpuMat &, bool, const std::string &)>(preprocess), std::placeholders::_1, deskew, std::placeholders::_2);
+      getPDFImages(inputFilePath, outputDirectory, bindedCallback);
+    } else if(fileType != "jpeg" && fileType != "jpg" && fileType != "png") {
+      std::cerr << "invalid input format" << std::endl;
+      exit(INVALID_PARAMETER);
+    } else {
+      cv::cuda::GpuMat pixels(cv::imread(inputFilePath, cv::IMREAD_GRAYSCALE));
+      preprocess(pixels, deskew, outputDirectory + "/img.png");
+    }
   } else {
     if (argc < 3) {
       std::cerr << "There are not enough parameters supplied, use -help for usage" << std::endl;

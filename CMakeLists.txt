@@ -7,7 +7,7 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 set(CAFFE2_USE_CUDNN 1)
 
 find_package(OpenCV 4.6.0 REQUIRED)
-find_package(Boost 1.82.0 COMPONENTS filesystem REQUIRED) # try to remove
+find_package(Boost 1.82.0 REQUIRED COMPONENTS filesystem)
 find_package(Torch REQUIRED)
 list(APPEND CMAKE_CXX_FLAGS ${TORCH_CXX_FLAGS})
 

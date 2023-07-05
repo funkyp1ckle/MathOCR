@@ -16,6 +16,33 @@
 #include <torch_tensorrt/logging.h>
 #include <torch_tensorrt/torch_tensorrt.h>
 
+torch::Tensor toTensor(const std::string& str) {
+  return torch::from_blob((void *) str.data(), {1}, torch::kUInt8);
+}
+
+torch::Tensor toTensor(const std::vector<std::string>& strs) {
+  auto len = (int64_t)strs.size();
+  torch::Tensor out = torch::zeros({static_cast<long long>(len)});
+  for(int64_t i = 0; i < len; ++i)
+    out[i] = toTensor(strs[i]);
+  return out;
+}
+
+std::vector<std::string> toString(const torch::Tensor& tensor) {
+  int64_t len = tensor.size(0);
+  std::vector<std::string> out;
+  out.reserve(len);
+  for(int64_t i = 0; i < len; ++i) {
+    int64_t strLen = tensor[i].size(0);
+    char* strArr = new char[strLen];
+    for(int64_t j = 0; j < strLen; ++j)
+      strArr[j] = (char)tensor[i][j].item<uchar>();
+    out[i] = std::string(strArr);
+    delete[] strArr;
+  }
+  return out;
+}
+
 Classifier::Classifier() {
   try {
     torch_tensorrt::logging::set_reportable_log_level(torch_tensorrt::logging::kERROR);

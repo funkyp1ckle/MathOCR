@@ -31,7 +31,7 @@ torch::data::Example<> DataSet::get(size_t idx) {
   cv::cuda::GpuMat imgMat(cv::imread(imagePath, cv::IMREAD_GRAYSCALE));
   torch::Tensor imageTensor = maxPool(ImageUtils::toTensor(imgMat, torch::kByte));
 
-  torch::Tensor labelTensor = torch::from_blob(label.data(), {1}, torch::kUInt8);
+  torch::Tensor labelTensor = toTensor({label}); //TODO: CHANGE WITH BATCHSIZE
   return {labelTensor, imageTensor};
 }
 
@@ -87,7 +87,7 @@ torch::Tensor Decoder::forward(torch::Tensor input) {
   return out.view({sizes[0], sizes[1], -1});
 }
 
-OCREngine::OCREngine() : model(Encoder(512, 640, 640), Decoder(512, 512, 512, 512)) {}
+OCREngine::OCREngine() : model(Encoder(512, 640, 640), Decoder(512, 512, 512, validTokens.size() + 1)) {}
 
 OCREngine::OCREngine(const std::string &modelPath) {
   //std::shared_ptr<OCREngine> ptr(this);
@@ -99,36 +99,54 @@ torch::Tensor OCREngine::forward(torch::Tensor input) {
 }
 
 void OCREngine::train(const std::string &dataDirectory, size_t epoch, float learningRate) {
+  model->train();
   DataSet dataset(dataDirectory, true);
   namespace data = torch::data;
   auto data_loader = data::make_data_loader<data::samplers::SequentialSampler>(std::move(dataset).map(data::transforms::Stack<>()), 64);
-  torch::optim::SGD optimizer(this->parameters(), learningRate);
+
+  auto start = std::chrono::high_resolution_clock::now();
+  torch::optim::Adam optimizer(this->parameters(), learningRate);
+  torch::nn::CTCLoss criterion;
+  criterion->to(torch::kCUDA);
   for (size_t i = 1; i <= epoch; ++i) {
     for (auto &batch: *data_loader) {
       optimizer.zero_grad();
       torch::Tensor prediction = forward(batch.data);
-      torch::Tensor loss = torch::nll_loss(prediction, batch.target);
+      torch::Tensor logProbs = torch::nn::functional::log_softmax(prediction, torch::nn::functional::LogSoftmaxFuncOptions(2));
+      torch::Tensor inputLengths = torch::full({prediction.size(0)}, prediction.size(0), torch::TensorOptions(torch::kLong)).to(torch::kCUDA);
+      torch::Tensor loss = criterion->forward(logProbs, batch.target, inputLengths, torch::tensor(batch.target.size(0)));
       loss.backward();
       optimizer.step();
-      std::cout << "Epoch: " << epoch << " | Loss: " << loss.item<float>() << std::endl;
+      std::cout << "Epoch: " << epoch << " | Loss: " << loss.item<float>() << " | Duration: " << (std::chrono::high_resolution_clock::now() - start).count() << std::endl;
     }
   }
 }
 
 void OCREngine::test(const std::string &dataDirectory) {
   DataSet dataset(dataDirectory, false);
-  torch::optional<size_t> totalDataCount = dataset.size();
   namespace data = torch::data;
   auto data_loader = data::make_data_loader<data::samplers::SequentialSampler>(std::move(dataset)
                                                                                    .map(data::transforms::Stack<>()),
                                                                                64);
+  size_t total = 0;
   size_t counter = 0;
+  torch::NoGradGuard no_grad;
   for (auto &batch: *data_loader) {
-    torch::Tensor prediction = forward(batch.data);
+    batch.data.to(torch::kCUDA);
+    torch::Tensor output = forward(batch.data);
+    torch::Tensor prediction = std::get<1>(output.max(2)).transpose(1, 0).contiguous().view(-1).to(torch::kCPU);
+    torch::Tensor inputLens = torch::full(batch.data.size(0), output.size(0), torch::TensorOptions(torch::kLong));
+    std::vector<std::string> simPreds = toString(prediction);
+    std::vector<std::string> targets = toString(batch.target);
+    total += targets.size();
+    size_t len = std::min(simPreds.size(), targets.size());
+    for(size_t i = 0; i < len; ++i)
+      if(simPreds[i] == targets[i])
+        ++counter;
     if (prediction.equal(batch.target))
       ++counter;
   }
-  std::cout << counter << "/" << totalDataCount << " correct" << std::endl;
+  std::cout << counter << "/" << total << " correct" << std::endl;
 }
 
 void OCREngine::exportWeights(const std::string &outputPath) {
@@ -138,7 +156,5 @@ void OCREngine::exportWeights(const std::string &outputPath) {
 std::string OCREngine::toLatex(const cv::cuda::GpuMat &pixels) {
   torch::Tensor imageTensor = ImageUtils::toTensor(pixels, torch::kByte);
   torch::Tensor prediction = forward(imageTensor);
-  std::ostringstream stream;
-  stream << prediction;
-  return stream.str();
+  return toString(prediction)[0];
 }

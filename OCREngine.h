@@ -61,6 +61,7 @@ public:
   std::string toLatex(const cv::cuda::GpuMat &pixels);
 
 private:
+  const static inline std::string validTokens = "1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ:.,\"/+=-;";
   torch::nn::Sequential model;
 };
 

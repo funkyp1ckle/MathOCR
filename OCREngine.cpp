@@ -4,38 +4,67 @@
 
 #include "OCREngine.h"
 #include "utils.h"
+#include <filesystem>
+#include <torch/script.h>
+#include <torch_tensorrt/logging.h>
+#include <torch_tensorrt/torch_tensorrt.h>
 
-DataSet::DataSet(const std::string &inputPath, bool training) : training(training) {
-  std::string inputFilePath = training ? inputPath + "/train.txt" : inputPath + "/test.txt";
-  std::ifstream inStream(inputFilePath);
-  if (!inStream) {
-    std::cerr << "Training file cannot be read from path(" << inputPath << ")" << std::endl;
-    exit(READ_ERROR);
-  }
-  long long len = std::count(std::istreambuf_iterator<char>(inStream), std::istreambuf_iterator<char>(), '\n');
-  images.reserve(len);
-  labels.reserve(len);
-  std::string label, imagePath;
-  while (inStream >> label >> imagePath) {
-    images.emplace_back(imagePath);
-    labels.emplace_back(label);
+DataSet::DataSet(const std::string &inputPath) {
+  for (const auto &entry: std::filesystem::directory_iterator(inputPath)) {
+    std::string path = entry.path().generic_string();
+    files.emplace_back(path.substr(0, path.rfind('.')));
   }
 }
 
 torch::data::Example<> DataSet::get(size_t idx) {
-  auto index = static_cast<long long>(idx);
-  std::string imagePath = images[index];
-  std::string label = labels[index];
+  std::string inputDir = files[idx];
 
-  torch::nn::MaxPool2d maxPool(torch::nn::MaxPoolOptions<2>({3, 3}).stride({1, 1}));//probably gonna break
-  cv::cuda::GpuMat imgMat(cv::imread(imagePath, cv::IMREAD_GRAYSCALE));
-  torch::Tensor imageTensor = maxPool(ImageUtils::toTensor(imgMat, torch::kByte));
+  std::ifstream texStream(inputDir + ".tex");
+  if (!texStream) {
+    std::cerr << "Tex file cannot be read from path(" << inputDir << ".tex"
+              << ")" << std::endl;
+    exit(READ_ERROR);
+  }
+  std::stringstream buffer;
+  buffer << texStream.rdbuf();
+  std::string tex = buffer.str();
 
-  torch::Tensor labelTensor = toTensor({label}); //TODO: CHANGE WITH BATCHSIZE
-  return {labelTensor, imageTensor};
+  cv::cuda::GpuMat imgMat(cv::imread(inputDir + ".png", cv::IMREAD_GRAYSCALE));
+  torch::Tensor imageTensor = ImageUtils::toTensor(imgMat, torch::kByte);
+
+  torch::Tensor labelTensor = toTensor(tex);
+  return {imageTensor, labelTensor};
 }
 
-Encoder::Encoder(int d_model, int width, int height)
+Classifier::Classifier() {
+  try {
+    torch_tensorrt::logging::set_reportable_log_level(torch_tensorrt::logging::kERROR);
+    classificationModule = torch::jit::load("classify.torchscript", torch::kCUDA);
+    //classificationModule = torch::jit::load("../models/best.torchscript", torch::kCUDA);
+    classificationModule.to(torch::kFloat);
+    classificationModule.eval();
+
+    //DEBUG GENERATE TORCH-TENSORRT
+    /*std::vector<int64_t> dims = {1, 3, 640, 640};
+    auto input = torch_tensorrt::Input(dims, torch::kFloat);
+    auto compile_settings = torch_tensorrt::ts::CompileSpec({input});
+    compile_settings.enabled_precisions = {torch::kFloat};
+    compile_settings.truncate_long_and_double = true;
+    classificationModule = torch_tensorrt::ts::compile(classificationModule, compile_settings);
+    classificationModule.save("../models/classify.torchscript");*/
+  } catch (const torch::Error &e) {
+    std::cerr << "Error loading classification model" << std::endl;
+    exit(READ_ERROR);
+  }
+}
+
+torch::Tensor Classifier::forward(const torch::Tensor &input) {
+  torch::Tensor pT = classificationModule.forward({input}).toTensor();
+  torch::Tensor score = std::get<0>(pT.slice(1, 4, -1).max(1, true));
+  return torch::cat({pT.slice(1, 0, 4), score, pT.slice(1, 4, -1)}, 1).permute({0, 2, 1});
+}
+
+EncoderImpl::EncoderImpl()
     : cnn(torch::nn::Conv2d(torch::nn::Conv2dOptions(1, 64, 3).padding({1, 1})),
           torch::nn::ReLU(torch::nn::ReLUOptions(true)),
           torch::nn::MaxPool2d(torch::nn::MaxPool2dOptions({2, 2})),
@@ -56,62 +85,75 @@ Encoder::Encoder(int d_model, int width, int height)
           torch::nn::Conv2d(torch::nn::Conv2dOptions(512, 512, 3).padding({1, 1})),
           torch::nn::BatchNorm2d(torch::nn::BatchNorm2dOptions(512)),
           torch::nn::ReLU(torch::nn::ReLUOptions(true))) {
-  d_model /= 2;
-  torch::Tensor div_term = torch::exp(torch::arange(0, d_model, 2) * -(std::log(10000.0) / (double) d_model));
-  torch::Tensor pos_w = torch::arange(0, width).unsqueeze(1);
-  torch::Tensor pos_h = torch::arange(0., height).unsqueeze(1);
-  positionalEncoding.slice(0, d_model, 2) = torch::sin(pos_w * div_term).transpose(0, 1).unsqueeze(1).repeat({1, height, 1});
-  positionalEncoding.slice(1, d_model, 2) = torch::cos(pos_w * div_term).transpose(0, 1).unsqueeze(1).repeat({1, height, 1});
-  positionalEncoding.index({d_model, nullptr, 2}) = torch::sin(pos_h * div_term).transpose(0, 1).unsqueeze(2).repeat({1, 1, width});
-  positionalEncoding.index({d_model + 1, nullptr, 2}) = torch::cos(pos_h * div_term).transpose(0, 1).unsqueeze(2).repeat({1, 1, width});
+  register_module("cnn", cnn);
+
+  constexpr int width = 640;
+  constexpr int height = 640;
+  positionalEncoding = torch::zeros({512, width, height});
+  torch::Tensor divTerm = torch::exp(torch::arange(0, 256, 2) * -log(10000 / 256));
+  torch::Tensor posW = torch::arange(0, width).unsqueeze(1);
+  torch::Tensor posH = torch::arange(0, height).unsqueeze(1);
+  positionalEncoding.slice(0, 256, 2) = torch::sin(posW * divTerm).transpose(0, 1).unsqueeze(1).repeat({1, height, 1});
+  positionalEncoding.slice(1, 256, 2) = torch::cos(posW * divTerm).transpose(0, 1).unsqueeze(1).repeat({1, height, 1});
+  positionalEncoding.slice(256, torch::indexing::None, 2) = torch::sin(posH * divTerm).transpose(0, 1).unsqueeze(2).repeat({1, 1, width});
+  positionalEncoding.slice(257, torch::indexing::None, 2) = torch::sin(posH * divTerm).transpose(0, 1).unsqueeze(2).repeat({1, 1, width});
 }
 
-torch::Tensor Encoder::forward(torch::Tensor input) {
+torch::Tensor EncoderImpl::forward(torch::Tensor input) {
+  std::cout << input.sizes() << std::endl; //TODO: REMOVE AFTER DEBUGGING
   return cnn->forward(input).squeeze(2).permute({2, 0, 1});
 }
 
-Decoder::Decoder(int64_t inputSize, int64_t hiddenSize, int64_t numLayers, int64_t numClasses)
-    : lstm(torch::nn::LSTMOptions(inputSize, hiddenSize).num_layers(numLayers).bidirectional(true)),
-      fc(torch::nn::LinearOptions(hiddenSize * 2, numClasses)) { }
+DecoderImpl::DecoderImpl(int64_t inputSize, int64_t hiddenSize, int64_t numLayers, int64_t numClasses)
+    : lstm(torch::nn::LSTMOptions(inputSize, hiddenSize)
+               .num_layers(numLayers)
+               .bidirectional(true)),
+      fc(torch::nn::LinearOptions(hiddenSize * 2, numClasses)) {
+  register_module("lstm", lstm);
+  register_module("fc", fc);
+}
 
-torch::Tensor Decoder::forward(torch::Tensor input) {
+torch::Tensor DecoderImpl::forward(torch::Tensor input) {
   torch::Tensor h0 = torch::zeros({lstm->options.num_layers() * 2, input.size(1), lstm->options.hidden_size()}).to(torch::kCUDA);
   torch::Tensor c0 = h0.clone();
 
   lstm->flatten_parameters();
-  std::tuple<torch::Tensor, std::tuple<torch::Tensor, torch::Tensor>> lstmOut
-      = lstm->forward(input, std::tuple<torch::Tensor, torch::Tensor>(h0, c0));
+  std::tuple<torch::Tensor, std::tuple<torch::Tensor, torch::Tensor>> lstmOut = lstm->forward(input, std::tuple<torch::Tensor, torch::Tensor>(h0, c0));
   torch::Tensor out = std::get<0>(lstmOut);
   torch::IntArrayRef sizes = out.sizes();
   out = fc->forward(out.view({sizes[0] * sizes[1], sizes[2]}));
   return out.view({sizes[0], sizes[1], -1});
 }
 
-OCREngine::OCREngine() : model(Encoder(512, 640, 640), Decoder(512, 512, 512, validTokens.size() + 1)) {}
+OCREngineImpl::OCREngineImpl() : model(Encoder(), Decoder(512, 256, 2, 64)) {
+  register_module("OCRModel", model);
+}
 
-OCREngine::OCREngine(const std::string &modelPath) {
-  //std::shared_ptr<OCREngine> ptr(this);
+OCREngineImpl::OCREngineImpl(const std::string &modelPath) {
+  //std::shared_ptr<OCREngineImpl> ptr(this);
   //torch::load(ptr, modelPath);
 }
 
-torch::Tensor OCREngine::forward(torch::Tensor input) {
+torch::Tensor OCREngineImpl::forward(torch::Tensor input) {
   return model->forward(input);
 }
 
-void OCREngine::train(const std::string &dataDirectory, size_t epoch, float learningRate) {
+void OCREngineImpl::train(const std::string &dataDirectory, size_t epoch, float learningRate) {
   model->train();
-  DataSet dataset(dataDirectory, true);
+  DataSet dataset(dataDirectory);
   namespace data = torch::data;
-  auto data_loader = data::make_data_loader<data::samplers::SequentialSampler>(std::move(dataset).map(data::transforms::Stack<>()), 64);
+  auto dataLoader = data::make_data_loader<data::samplers::SequentialSampler>(std::move(dataset).map(data::transforms::Stack<>()), 64);
 
   auto start = std::chrono::high_resolution_clock::now();
   torch::optim::Adam optimizer(this->parameters(), learningRate);
   torch::nn::CTCLoss criterion;
   criterion->to(torch::kCUDA);
   for (size_t i = 1; i <= epoch; ++i) {
-    for (auto &batch: *data_loader) {
+    for (auto &batch: *dataLoader) {
+      torch::Tensor data = batch.data.to(torch::kCUDA);
+      data = data.squeeze(1);
       optimizer.zero_grad();
-      torch::Tensor prediction = forward(batch.data);
+      torch::Tensor prediction = forward(data);
       torch::Tensor logProbs = torch::nn::functional::log_softmax(prediction, torch::nn::functional::LogSoftmaxFuncOptions(2));
       torch::Tensor inputLengths = torch::full({prediction.size(0)}, prediction.size(0), torch::TensorOptions(torch::kLong)).to(torch::kCUDA);
       torch::Tensor loss = criterion->forward(logProbs, batch.target, inputLengths, torch::tensor(batch.target.size(0)));
@@ -122,8 +164,8 @@ void OCREngine::train(const std::string &dataDirectory, size_t epoch, float lear
   }
 }
 
-void OCREngine::test(const std::string &dataDirectory) {
-  DataSet dataset(dataDirectory, false);
+void OCREngineImpl::test(const std::string &dataDirectory) {
+  DataSet dataset(dataDirectory);
   namespace data = torch::data;
   auto data_loader = data::make_data_loader<data::samplers::SequentialSampler>(std::move(dataset)
                                                                                    .map(data::transforms::Stack<>()),
@@ -138,22 +180,24 @@ void OCREngine::test(const std::string &dataDirectory) {
     torch::Tensor inputLens = torch::full(batch.data.size(0), output.size(0), torch::TensorOptions(torch::kLong));
     std::vector<std::string> simPreds = toString(prediction);
     std::vector<std::string> targets = toString(batch.target);
-    total += targets.size();
-    size_t len = std::min(simPreds.size(), targets.size());
-    for(size_t i = 0; i < len; ++i)
-      if(simPreds[i] == targets[i])
-        ++counter;
-    if (prediction.equal(batch.target))
-      ++counter;
+    size_t outputLens = simPreds.size();
+    for(int i = 0; i < outputLens; ++i) {
+      total += targets[i].size();
+      size_t len = std::min(simPreds[i].size(), targets[i].size());
+      for (size_t j = 0; j < len; ++j)
+        if (simPreds[i][j] == targets[i][j])
+          ++counter;
+    }
   }
-  std::cout << counter << "/" << total << " correct" << std::endl;
+  std::cout << counter << "/" << total << " characters correct" << std::endl;
 }
 
-void OCREngine::exportWeights(const std::string &outputPath) {
-  torch::save(std::shared_ptr<OCREngine>(this), outputPath + "/weights.pt");
+void OCREngineImpl::exportWeights(const std::string &outputPath) {
+  std::shared_ptr<OCREngineImpl> ptr(this);
+  torch::save(ptr, outputPath + "/weights.pt");
 }
 
-std::string OCREngine::toLatex(const cv::cuda::GpuMat &pixels) {
+std::string OCREngineImpl::toLatex(const cv::cuda::GpuMat &pixels) {
   torch::Tensor imageTensor = ImageUtils::toTensor(pixels, torch::kByte);
   torch::Tensor prediction = forward(imageTensor);
   return toString(prediction)[0];

@@ -14,44 +14,51 @@ extern const int INVALID_PARAMETER;
 extern const int READ_ERROR;
 extern const int PROCESSING_ERROR;
 
-class DataSet : public torch::data::datasets::Dataset<DataSet> {
+class Classifier {
 public:
-  explicit DataSet(const std::string &inputPath, bool training);
-  torch::data::Example<> get(size_t idx) override;//{ return {.first, data[(long long) idx]}; }
-  torch::data::Example<> operator[](size_t idx) { return get(idx); }
-  torch::optional<size_t> size() const override { return images.size(); }
-  bool isTraining() const { return training; }
+  Classifier();
+  torch::Tensor forward(const torch::Tensor &input);
 
 private:
-  std::vector<std::string> images;
-  std::vector<std::string> labels;
-  bool training;
+  torch::jit::script::Module classificationModule;
+};
+
+class DataSet : public torch::data::datasets::Dataset<DataSet> {
+public:
+  explicit DataSet(const std::string &inputPath);
+  torch::data::Example<> get(size_t idx) override;//{ return {.first, data[(long long) idx]}; }
+  torch::data::Example<> operator[](size_t idx) { return get(idx); }
+  torch::optional<size_t> size() const override { return files.size(); }
+private:
+  std::vector<std::string> files;
 };
 
 //VGG16 + 2D Positional Encoding
-class Encoder : public torch::nn::Module {
+class EncoderImpl : public torch::nn::Module {
 public:
-  Encoder(int d_model, int width, int height);
+  EncoderImpl();
   torch::Tensor forward(torch::Tensor input);
 
 private:
   torch::nn::Sequential cnn;
   torch::Tensor positionalEncoding;
 };
+TORCH_MODULE(Encoder);
 
-class Decoder : public torch::nn::Module {
+class DecoderImpl : public torch::nn::Module {
 public:
-  Decoder(int64_t inputSize, int64_t hiddenSize, int64_t numLayers, int64_t numClasses);
+  DecoderImpl(int64_t inputSize, int64_t hiddenSize, int64_t numLayers, int64_t numClasses);
   torch::Tensor forward(torch::Tensor input);
 private:
-  torch::nn::LSTM lstm;
-  torch::nn::Linear fc;
+  torch::nn::LSTM lstm{nullptr};
+  torch::nn::Linear fc{nullptr};
 };
+TORCH_MODULE(Decoder);
 
-class OCREngine : public torch::nn::Module {
+class OCREngineImpl : public torch::nn::Module {
 public:
-  OCREngine();
-  explicit OCREngine(const std::string &modelPath);
+  OCREngineImpl();
+  explicit OCREngineImpl(const std::string &modelPath);
   torch::Tensor forward(torch::Tensor input);
 
   void train(const std::string &dataDirectory, size_t epoch, float learningRate);
@@ -61,8 +68,8 @@ public:
   std::string toLatex(const cv::cuda::GpuMat &pixels);
 
 private:
-  const static inline std::string validTokens = "1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ:.,\"/+=-;";
   torch::nn::Sequential model;
 };
+TORCH_MODULE(OCREngine);
 
 #endif//MATHOCR_OCRENGINE_H

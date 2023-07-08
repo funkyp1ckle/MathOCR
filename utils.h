@@ -7,12 +7,22 @@
 
 #include "OCREngine.h"
 
-#include <iostream>
+#include <boost/asio/buffer.hpp>
+#include <boost/asio/placeholders.hpp>
+#include <boost/asio/read_until.hpp>
+#include <boost/asio/streambuf.hpp>
+#include <boost/bind/bind.hpp>
+#include <boost/process/async_pipe.hpp>
+
 #include <opencv2/core/core.hpp>
 #include <opencv2/core/cuda.hpp>
 #include <opencv2/cudafilters.hpp>
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
+
+#include <boost/process/child.hpp>
+#include <iostream>
+#include <regex>
 #include <string>
 #include <variant>
 
@@ -45,13 +55,33 @@ enum CallbackType {
   PROCESS
 };
 
-class Classifier {
+class GhostscriptHandler {
 public:
-  Classifier();
-  torch::Tensor forward(const torch::Tensor &input);
+  GhostscriptHandler(std::string outputFileDirectory, const std::variant<std::function<std::string(cv::cuda::GpuMat &)>, std::function<void(cv::cuda::GpuMat &, const std::string &)>> &callback);
+  void processOutput(const boost::system::error_code &ec, std::size_t size);
+
+  void run(const std::string &inputFilePath);
+
+  int done();
 
 private:
-  torch::jit::script::Module classificationModule;
+  std::variant<std::function<std::string(cv::cuda::GpuMat &)>, std::function<void(cv::cuda::GpuMat &, const std::string &)>> callback;
+  CallbackType callbackType;
+  boost::asio::io_context ioContext;
+  boost::process::async_pipe asyncPipe;
+  boost::asio::streambuf buffer;
+
+  boost::process::child process;
+
+  std::string outputFileDirectory;
+  std::string outputPrefix;
+  std::string fileName;
+
+  std::regex outputFormat;
+
+  std::string latexEncoding;
+
+  cv::cuda::GpuMat curImg;
 };
 
 class ImageUtils {
@@ -89,9 +119,9 @@ private:
   static inline cv::cuda::GpuMat resized;
 };
 
-torch::Tensor toTensor(const std::vector<std::string>& strs);
+torch::Tensor toTensor(const std::string &strs);
 
-std::vector<std::string> toString(const torch::Tensor& tensor);
+std::vector<std::string> toString(const torch::Tensor &tensor);
 
 void printHelp();
 
@@ -103,7 +133,7 @@ bool isDir(const char *path);
 
 void winToNixFilePath(std::string &path);
 
-void getPDFImages(const std::string &inputFilePath, const std::string &outputFilePath,
+void getPDFImages(const std::string &inputFilePath, const std::string &outputFileDirectory,
                   const std::variant<std::function<std::string(cv::cuda::GpuMat &)>,
                                      std::function<void(cv::cuda::GpuMat &, const std::string &)>> &callback);
 #endif//MATHOCR_UTILS_H

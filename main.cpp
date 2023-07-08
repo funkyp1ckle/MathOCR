@@ -35,7 +35,7 @@ void preprocess(cv::cuda::GpuMat &pixels, bool deskew, const std::string &output
 
 std::string imgToLatex(cv::cuda::GpuMat &pixels, OCREngine &ocr) {
   preprocess(pixels, true);
-  return ocr.toLatex(pixels);
+  return ocr->toLatex(pixels);
 }
 
 void imgToLatex(cv::cuda::GpuMat &pixels, OCREngine &ocr, const std::string &outputPrefix) {
@@ -64,15 +64,18 @@ int main(int argc, char **argv) {
     std::cout << "MathOCR version: " << VERSION << std::endl;
   } else if (argOne == "train") {
     OCREngine ocr;
-    ocr.to(torch::kCUDA);
+    ocr->to(torch::kCUDA);
     std::string dataDirectory(argv[2]);
     winToNixFilePath(dataDirectory);
     unsigned long epoch = std::stoul(argv[3]);
     float learningRate = std::stof(argv[4]);
-    ocr.train(dataDirectory, epoch, learningRate);
+    ocr->train(dataDirectory, epoch, learningRate);
+    ocr->exportWeights("../models/ocr.pt");
   } else if (argOne == "preprocess") {
     std::string inputFilePath(argv[2]);
+    winToNixFilePath(inputFilePath);
     std::string outputDirectory(argv[3]);
+    winToNixFilePath(outputDirectory);
     bool deskew = std::stoi(argv[4]) != 0;
     std::string fileType = inputFilePath.substr(inputFilePath.rfind(".") + 1);
     if(fileType == "pdf") {
@@ -98,7 +101,7 @@ int main(int argc, char **argv) {
     size_t dotIdx = inputFilePath.rfind('.');
     std::string inputFileEnding = inputFilePath.substr(dotIdx + 1);
     OCREngine ocr("weights.pth");
-    ocr.to(torch::kCUDA);
+    ocr->to(torch::kCUDA);
     ImageUtils imgUtils;
     if (inputFileEnding == "pdf") {
       std::function<std::string(cv::cuda::GpuMat &)> bindedCallback = std::bind(static_cast<std::string(&)(cv::cuda::GpuMat &, OCREngine&)>(imgToLatex), std::placeholders::_1, ocr);

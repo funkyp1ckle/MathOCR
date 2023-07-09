@@ -1,5 +1,6 @@
 #include <filesystem>
 #include <iostream>
+#include <opencv2/cudawarping.hpp>
 
 #include "utils.h"
 
@@ -18,6 +19,7 @@ void preprocess(cv::cuda::GpuMat &pixels, bool deskew) {
   ImageUtils::threshold(pixels);
   ImageUtils::denoise(pixels);
   ImageUtils::crop(pixels);
+  cv::cuda::resize(pixels, pixels, cv::Size(640, 640), cv::INTER_AREA);
   if (deskew) {
     std::map<cv::Rect, ImageType, RectComparator> imageBlocks = ImageUtils::getImageBlocks(pixels);
     float skewSum = 0;

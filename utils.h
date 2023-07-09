@@ -59,6 +59,7 @@ class GhostscriptHandler {
 public:
   GhostscriptHandler(std::string outputFileDirectory, const std::variant<std::function<std::string(cv::cuda::GpuMat &)>, std::function<void(cv::cuda::GpuMat &, const std::string &)>> &callback);
   void processOutput(const boost::system::error_code &ec, std::size_t size);
+  void processOutput();
 
   void run(const std::string &inputFilePath);
 
@@ -76,6 +77,8 @@ private:
   std::string outputFileDirectory;
   std::string outputPrefix;
   std::string fileName;
+
+  int pageNum;
 
   std::regex outputFormat;
 

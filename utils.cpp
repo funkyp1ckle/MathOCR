@@ -238,7 +238,7 @@ void ImageUtils::equalize(cv::cuda::GpuMat &pixels) {
   cv::cuda::equalizeHist(pixels, pixels);
 }
 
-GhostscriptHandler::GhostscriptHandler(std::string outputFileDirectory, const std::variant<std::function<std::string(cv::cuda::GpuMat &)>, std::function<void(cv::cuda::GpuMat &, const std::string &)>> &callback) : callback(callback), ioContext(), asyncPipe(ioContext), outputFileDirectory(std::move(outputFileDirectory)), outputFormat("^Page [0-9]+\n$") {
+GhostscriptHandler::GhostscriptHandler(std::string outputFileDirectory, const std::variant<std::function<std::string(cv::cuda::GpuMat &)>, std::function<void(cv::cuda::GpuMat &, const std::string &)>> &callback) : callback(callback), ioContext(), asyncPipe(ioContext), outputFileDirectory(std::move(outputFileDirectory)), outputFormat("^Page [0-9]+\n$"), pageNum(0) {
   if (std::holds_alternative<std::function<std::string(cv::cuda::GpuMat &)>>(callback))
     callbackType = LATEX;
   else
@@ -271,14 +271,19 @@ void GhostscriptHandler::run(const std::string& inputFilePath) {
 void GhostscriptHandler::processOutput(const boost::system::error_code &ec, std::size_t size) {
   if(ec) {
     if(ec == boost::asio::error::broken_pipe)
-      return ;
+      return processOutput();
     std::cerr << ec.message() << std::endl;
     exit(PROCESSING_ERROR);
   }
   std::string line((char*)buffer.data().data(), size);
   buffer.consume(size);
-  if(std::regex_match(line, outputFormat)) {
-    int pageNum = std::stoi(line.substr(4));
+  if(std::regex_match(line, outputFormat))
+    processOutput();
+  boost::asio::async_read_until(asyncPipe, buffer, '\n', boost::bind(&GhostscriptHandler::processOutput, this, boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred));
+}
+
+void GhostscriptHandler::processOutput() {
+  if(pageNum != 0) {
     std::string imgPath = outputPrefix;
     imgPath += "_page";
     imgPath += std::to_string(pageNum);
@@ -303,7 +308,7 @@ void GhostscriptHandler::processOutput(const boost::system::error_code &ec, std:
       std::get<std::function<void(cv::cuda::GpuMat &, const std::string &)>>(callback)(curImg, outputFilePath);
     }
   }
-  boost::asio::async_read_until(asyncPipe, buffer, '\n', boost::bind(&GhostscriptHandler::processOutput, this, boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred));
+  ++pageNum;
 }
 
 int GhostscriptHandler::done() {

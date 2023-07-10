@@ -14,7 +14,7 @@
 #include <stack>
 #include <utility>
 
-torch::Tensor toTensor(const std::string &str) {
+torch::Tensor OCRUtils::toTensor(const std::string &str) {
   size_t len = str.size();
   torch::Tensor tensor = torch::empty(static_cast<int64_t>(len + 1), torch::TensorOptions(torch::kInt8));
   int i;
@@ -24,7 +24,7 @@ torch::Tensor toTensor(const std::string &str) {
   return tensor;
 }
 
-std::vector<std::string> toString(const torch::Tensor &tensor) {
+std::vector<std::string> OCRUtils::toString(const torch::Tensor &tensor) {
   int64_t batchSize = tensor.size(0);
   std::vector<std::string> answer;
   answer.reserve(batchSize);
@@ -238,7 +238,7 @@ void ImageUtils::equalize(cv::cuda::GpuMat &pixels) {
   cv::cuda::equalizeHist(pixels, pixels);
 }
 
-GhostscriptHandler::GhostscriptHandler(std::string outputFileDirectory, const std::variant<std::function<std::string(cv::cuda::GpuMat &)>, std::function<void(cv::cuda::GpuMat &, const std::string &)>> &callback) : callback(callback), ioContext(), asyncPipe(ioContext), outputFileDirectory(std::move(outputFileDirectory)), outputFormat("^Page [0-9]+\n$"), pageNum(0) {
+GhostscriptHandler::GhostscriptHandler(std::string outputFileDirectory, const std::variant<std::function<std::string(cv::cuda::GpuMat &)>, std::function<void(cv::cuda::GpuMat &)>> &callback) : callback(callback), ioContext(), asyncPipe(ioContext), outputFileDirectory(std::move(outputFileDirectory)), outputFormat("^Page [0-9]+\n$"), pageNum(0) {
   if (std::holds_alternative<std::function<std::string(cv::cuda::GpuMat &)>>(callback))
     callbackType = LATEX;
   else
@@ -305,7 +305,10 @@ void GhostscriptHandler::processOutput() {
       outputFilePath += "_page";
       outputFilePath += std::to_string(pageNum);
       outputFilePath += ".png";
-      std::get<std::function<void(cv::cuda::GpuMat &, const std::string &)>>(callback)(curImg, outputFilePath);
+      std::get<std::function<void(cv::cuda::GpuMat &)>>(callback)(curImg);
+      cv::cuda::resize(curImg, curImg, cv::Size(640, 640), cv::INTER_AREA);
+      cv::Mat out(curImg);
+      cv::imwrite(outputFilePath, out);
     }
   }
   ++pageNum;
@@ -317,7 +320,7 @@ int GhostscriptHandler::done() {
   return process.exit_code();
 }
 
-void getPDFImages(const std::string &inputFilePath, const std::string &outputFileDirectory, const std::variant<std::function<std::string(cv::cuda::GpuMat &)>, std::function<void(cv::cuda::GpuMat &, const std::string &)>> &callback) {
+void getPDFImages(const std::string &inputFilePath, const std::string &outputFileDirectory, const std::variant<std::function<std::string(cv::cuda::GpuMat &)>, std::function<void(cv::cuda::GpuMat &)>> &callback) {
   GhostscriptHandler ghostscriptHandler(outputFileDirectory, callback);
   //BENCHMARK
   //auto startTime = std::chrono::high_resolution_clock::now();
@@ -332,7 +335,7 @@ void getPDFImages(const std::string &inputFilePath, const std::string &outputFil
 }
 
 void printHelp() {
-  std::cout << "usage: MathOCR [-v | --version] OR [-h | --help] OR ([PDF or IMAGE PATH] [OUTPUT DIRECTORY])" << std::endl;
+  std::cout << "usage: MathOCR [-v | --version]\n[-h | --help]\n[PDF or IMAGE PATH] [OUTPUT DIRECTORY]\npreprocess [PDF OR IMAGE PATH]\ntrain [dataFolder][epochs][learningRate]" << std::endl;
 }
 
 int clamp(int n, int lower, int upper) {

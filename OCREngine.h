@@ -29,6 +29,7 @@ public:
   torch::data::Example<> get(size_t idx) override;//{ return {.first, data[(long long) idx]}; }
   torch::data::Example<> operator[](size_t idx) { return get(idx); }
   torch::optional<size_t> size() const override { return files.size(); }
+
 private:
   std::vector<std::string> files;
 };
@@ -38,20 +39,67 @@ class EncoderImpl : public torch::nn::Module {
 public:
   EncoderImpl();
   torch::Tensor forward(torch::Tensor input);
+  torch::Tensor positionalEncoding(torch::Tensor input);
 
 private:
-  torch::nn::Sequential cnn;
-  torch::Tensor positionalEncoding;
+  torch::nn::Conv2d conv1;
+  torch::nn::MaxPool2d maxPool1;
+
+  torch::nn::Conv2d conv2;
+  torch::nn::MaxPool2d maxPool2;
+
+  torch::nn::Conv2d conv3;
+
+  torch::nn::Conv2d conv4;
+  torch::nn::MaxPool2d maxPool3;
+
+  torch::nn::Conv2d conv5;
+  torch::nn::MaxPool2d maxPool4;
+
+  torch::nn::Conv2d conv6;
 };
 TORCH_MODULE(Encoder);
 
+class AttentionImpl : public torch::nn::Module {
+public:
+  AttentionImpl(int64_t encoderDim, int64_t decoderDim, int64_t attentionDim);
+  std::pair<torch::Tensor, torch::Tensor> forward(torch::Tensor encoderOut, torch::Tensor decoderHidden);
+
+private:
+  torch::nn::Linear encoderAttention;
+  torch::nn::Linear decoderAttention;
+  torch::nn::Linear fullAttention;
+  torch::nn::ReLU relu;
+  torch::nn::Softmax softmax;
+};
+TORCH_MODULE(Attention);
+
 class DecoderImpl : public torch::nn::Module {
 public:
-  DecoderImpl(int64_t inputSize, int64_t hiddenSize, int64_t numLayers, int64_t numClasses);
-  torch::Tensor forward(torch::Tensor input);
+  DecoderImpl(int64_t attentionDim, int64_t embedDim, int64_t decoderDim, int64_t vocabSize, int64_t encoderDim, float dropout, double p);
+  std::vector<torch::Tensor> forward(torch::Tensor encoderOut, torch::Tensor encodedCaptions, torch::Tensor captionLens, double p);
+
 private:
-  torch::nn::LSTM lstm{nullptr};
-  torch::nn::Linear fc{nullptr};
+  void initWeights();
+  torch::Tensor initHiddenState(torch::Tensor encoderOut);
+
+  Attention attention;
+
+  torch::nn::Embedding embedding;
+  torch::nn::Dropout dropout;
+
+  torch::nn::GRUCell decodeStep;
+  torch::nn::Linear initH;
+  torch::nn::Linear initC;
+  torch::nn::Linear fBeta;
+  torch::nn::Sigmoid sigmoid;
+  torch::nn::Linear fc;
+
+  int64_t encoderDim;
+  int64_t attentionDim;
+  int64_t decoderDim;
+  int64_t vocabSize;
+  double p;
 };
 TORCH_MODULE(Decoder);
 
@@ -68,7 +116,8 @@ public:
   std::string toLatex(const cv::cuda::GpuMat &pixels);
 
 private:
-  torch::nn::Sequential model;
+  Encoder encoder;
+  Decoder decoder;
 };
 TORCH_MODULE(OCREngine);
 

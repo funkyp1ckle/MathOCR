@@ -28,7 +28,10 @@
 
 extern const int ALLOC_ERROR;
 
-struct Options {};
+
+struct Options {
+  bool deskew = false;
+};
 
 extern Options settings;
 
@@ -55,9 +58,17 @@ enum CallbackType {
   PROCESS
 };
 
+class OCRUtils {
+public:
+  OCRUtils() = default;
+
+  static torch::Tensor toTensor(const std::string &strs);
+  static std::vector<std::string> toString(const torch::Tensor &tensor);
+};
+
 class GhostscriptHandler {
 public:
-  GhostscriptHandler(std::string outputFileDirectory, const std::variant<std::function<std::string(cv::cuda::GpuMat &)>, std::function<void(cv::cuda::GpuMat &, const std::string &)>> &callback);
+  GhostscriptHandler(std::string outputFileDirectory, const std::variant<std::function<std::string(cv::cuda::GpuMat &)>, std::function<void(cv::cuda::GpuMat &)>> &callback);
   void processOutput(const boost::system::error_code &ec, std::size_t size);
   void processOutput();
 
@@ -66,7 +77,7 @@ public:
   int done();
 
 private:
-  std::variant<std::function<std::string(cv::cuda::GpuMat &)>, std::function<void(cv::cuda::GpuMat &, const std::string &)>> callback;
+  std::variant<std::function<std::string(cv::cuda::GpuMat &)>, std::function<void(cv::cuda::GpuMat &)>> callback;
   CallbackType callbackType;
   boost::asio::io_context ioContext;
   boost::process::async_pipe asyncPipe;
@@ -122,10 +133,6 @@ private:
   static inline cv::cuda::GpuMat resized;
 };
 
-torch::Tensor toTensor(const std::string &strs);
-
-std::vector<std::string> toString(const torch::Tensor &tensor);
-
 void printHelp();
 
 int clamp(int n, int lower, int upper);
@@ -138,5 +145,5 @@ void winToNixFilePath(std::string &path);
 
 void getPDFImages(const std::string &inputFilePath, const std::string &outputFileDirectory,
                   const std::variant<std::function<std::string(cv::cuda::GpuMat &)>,
-                                     std::function<void(cv::cuda::GpuMat &, const std::string &)>> &callback);
+                                     std::function<void(cv::cuda::GpuMat &)>> &callback);
 #endif//MATHOCR_UTILS_H

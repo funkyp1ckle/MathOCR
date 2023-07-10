@@ -14,13 +14,12 @@ const std::string VERSION = "0.1";
 
 Options settings;
 
-void preprocess(cv::cuda::GpuMat &pixels, bool deskew) {
+void preprocess(cv::cuda::GpuMat &pixels) {
   ImageUtils::equalize(pixels);
   ImageUtils::threshold(pixels);
   ImageUtils::denoise(pixels);
   ImageUtils::crop(pixels);
-  cv::cuda::resize(pixels, pixels, cv::Size(640, 640), cv::INTER_AREA);
-  if (deskew) {
+  if (settings.deskew) {
     std::map<cv::Rect, ImageType, RectComparator> imageBlocks = ImageUtils::getImageBlocks(pixels);
     float skewSum = 0;
     for (auto itr = imageBlocks.begin(); itr != imageBlocks.end(); ++itr)
@@ -29,14 +28,8 @@ void preprocess(cv::cuda::GpuMat &pixels, bool deskew) {
   }
 }
 
-void preprocess(cv::cuda::GpuMat &pixels, bool deskew, const std::string &outputPath) {
-  preprocess(pixels, deskew);
-  cv::Mat out(pixels);
-  cv::imwrite(outputPath, out);
-}
-
 std::string imgToLatex(cv::cuda::GpuMat &pixels, OCREngine &ocr) {
-  preprocess(pixels, true);
+  preprocess(pixels);
   return ocr->toLatex(pixels);
 }
 
@@ -78,17 +71,20 @@ int main(int argc, char **argv) {
     winToNixFilePath(inputFilePath);
     std::string outputDirectory(argv[3]);
     winToNixFilePath(outputDirectory);
-    bool deskew = std::stoi(argv[4]) != 0;
-    std::string fileType = inputFilePath.substr(inputFilePath.rfind(".") + 1);
+    settings.deskew = std::stoi(argv[4]) != 0;
+    std::string fileType = inputFilePath.substr(inputFilePath.rfind('.') + 1);
     if(fileType == "pdf") {
-      std::function<void(cv::cuda::GpuMat &, const std::string &)> bindedCallback = std::bind(static_cast<void(&)(cv::cuda::GpuMat &, bool, const std::string &)>(preprocess), std::placeholders::_1, deskew, std::placeholders::_2);
+      std::function<void(cv::cuda::GpuMat &)> bindedCallback = std::bind(static_cast<void(&)(cv::cuda::GpuMat &)>(preprocess), std::placeholders::_1);
       getPDFImages(inputFilePath, outputDirectory, bindedCallback);
     } else if(fileType != "jpeg" && fileType != "jpg" && fileType != "png") {
       std::cerr << "invalid input format" << std::endl;
       exit(INVALID_PARAMETER);
     } else {
       cv::cuda::GpuMat pixels(cv::imread(inputFilePath, cv::IMREAD_GRAYSCALE));
-      preprocess(pixels, deskew, outputDirectory + "/img.png");
+      preprocess(pixels);
+      cv::cuda::resize(pixels, pixels, cv::Size(640, 640), cv::INTER_AREA);
+      cv::Mat out(pixels);
+      cv::imwrite( outputDirectory + "/img.png", out);
     }
   } else {
     if (argc < 3) {

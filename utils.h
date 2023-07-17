@@ -92,7 +92,7 @@ public:
 class GhostscriptHandler {
 public:
   GhostscriptHandler(std::filesystem::path outputFileDirectory,
-                     const std::variant<std::function<std::vector<std::string>(cv::cuda::GpuMat &)>,
+                     const std::variant<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>,
                      std::function<std::map<cv::Rect, ImageType, RectComparator>(cv::cuda::GpuMat &)>> &callback);
   void processOutput(const boost::system::error_code &ec, std::size_t size);
   void processOutput();
@@ -102,7 +102,7 @@ public:
   int done();
 
 private:
-  std::variant<std::function<std::vector<std::string>(cv::cuda::GpuMat &)>, std::function<std::map<cv::Rect, ImageType, RectComparator>(cv::cuda::GpuMat &)>> callback;
+  std::variant<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>, std::function<std::map<cv::Rect, ImageType, RectComparator>(cv::cuda::GpuMat &)>> callback;
   CallbackType callbackType;
   boost::asio::io_context ioContext;
   boost::process::async_pipe asyncPipe;
@@ -139,6 +139,6 @@ public:
 int clamp(int n, int lower, int upper);
 
 void getPDFImages(const std::filesystem::path &inputFilePath, const std::filesystem::path &outputFileDirectory,
-                  const std::variant<std::function<std::vector<std::string>(cv::cuda::GpuMat &)>,
+                  const std::variant<std::function<void(cv::cuda::GpuMat &, const std::string &)>,
                  std::function<std::map<cv::Rect, ImageType, RectComparator>(cv::cuda::GpuMat &)>> &callback);
 #endif//MATHOCR_UTILS_H

@@ -22,7 +22,7 @@ Converts PDFs and images into tex
 
 ### Datasets
 - [Document Object Classification Dataset](https://universe.roboflow.com/mathocr/classify-e5mwr) - for deskew 
-- [PDF to Latex Dataset] - TODO
+- [Math Image to Latex Dataset](https://zenodo.org/record/56198#.V2px0jXT6eA)
 
 ### Usage
 ```

@@ -30,26 +30,23 @@ std::map<cv::Rect, ImageType, RectComparator> preprocess(cv::cuda::GpuMat &pixel
   return imageBlocks;
 }
 
-std::vector<std::string> imgToLatex(cv::cuda::GpuMat &pixels) {
+void imgToLatex(cv::cuda::GpuMat &pixels, const std::filesystem::path &outputPrefix) {
   std::map<cv::Rect, ImageType, RectComparator> imageBlocks = preprocess(pixels);
   std::vector<std::string> latexStrs;
   //TODO: ADD LOGIC TO MERGE TEXT INTO ONE STR UNTIL IT HITS ANOTHER TYPE
   for(auto itr = imageBlocks.begin(); itr != imageBlocks.end(); ++itr) {
     cv::cuda::GpuMat roi = pixels(itr->first);
-    if(itr->second == MATH)
+    if(itr->second == MATH) {
       latexStrs.emplace_back(OCREngine::toLatex(roi));
-    else if(itr->second == TEXT)
+    } else if(itr->second == TEXT) {
       latexStrs.emplace_back(OCREngine::toText(roi));
-    else if(itr->second == TABLE)
-      latexStrs.emplace_back(OCREngine::toTable(imgToLatex(roi)));
-    else
+    } else if(itr->second == TABLE) {
+      std::map<cv::Rect, ImageType, RectComparator> tableBlocks = ImageUtils::getImageBlocks(roi);
+      latexStrs.emplace_back(OCREngine::toTable(tableBlocks, outputPrefix));
+    } else {
       latexStrs.emplace_back(OCREngine::toImage(roi));
+    }
   }
-  return latexStrs;
-}
-
-void imgToLatex(cv::cuda::GpuMat &pixels, const std::filesystem::path &outputPrefix) {
-  std::vector<std::string> output = imgToLatex(pixels);
   //TODO: ADD OUTPUT HANDLING
 }
 
@@ -101,9 +98,8 @@ int main(int argc, char **argv) {
     std::filesystem::path inputFilePath(argv[1]);
     std::filesystem::path outputDirectory(argv[2]);
     std::filesystem::path inputFileEnding = inputFilePath.extension();
-    ImageUtils imgUtils;
     if (inputFileEnding == ".pdf") {
-      std::function<std::vector<std::string>(cv::cuda::GpuMat &)> bindedCallback = std::bind(static_cast<std::vector<std::string>(&)(cv::cuda::GpuMat &)>(imgToLatex), std::placeholders::_1);
+      std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)> bindedCallback = std::bind(static_cast<void(&)(cv::cuda::GpuMat &, const std::filesystem::path &)>(imgToLatex), std::placeholders::_1, std::placeholders::_2);
       getPDFImages(inputFilePath, outputDirectory, bindedCallback);
     } else {
       std::cerr << "invalid input format" << std::endl;

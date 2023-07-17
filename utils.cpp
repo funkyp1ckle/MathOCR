@@ -356,9 +356,9 @@ void ImageUtils::threshold(cv::cuda::GpuMat &pixels) {
 }
 
 GhostscriptHandler::GhostscriptHandler(std::filesystem::path outputFileDirectory,
-                                       const std::variant<std::function<std::vector<std::string>(cv::cuda::GpuMat &)>,
+                                       const std::variant<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>,
                                                           std::function<std::map<cv::Rect, ImageType, RectComparator>(cv::cuda::GpuMat &)>> &callback) : callback(callback), ioContext(), asyncPipe(ioContext), outputFileDirectory(std::move(outputFileDirectory)), outputFormat("^Page [0-9]+\n$"), pageNum(0) {
-  if (std::holds_alternative<std::function<std::vector<std::string>(cv::cuda::GpuMat &)>>(callback))
+  if (std::holds_alternative<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>>(callback))
     callbackType = LATEX;
   else
     callbackType = PROCESS;
@@ -413,8 +413,7 @@ void GhostscriptHandler::processOutput() {
       exit(ALLOC_ERROR);
     }
     if (callbackType == LATEX) {
-      //TODO:ADD NEWPAGE COMMAND AND HANDLE OUTPUT
-      std::vector<std::string> latex = std::get<std::function<std::vector<std::string>(cv::cuda::GpuMat &)>>(callback)(curImg);
+      std::get<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>>(callback)(curImg, outputFileDirectory);
     } else {
       std::filesystem::path outputFilePath = outputFileDirectory;
       outputFilePath /= fileName;
@@ -436,7 +435,7 @@ int GhostscriptHandler::done() {
   return process.exit_code();
 }
 
-void getPDFImages(const std::filesystem::path &inputFilePath, const std::filesystem::path &outputFileDirectory, const std::variant<std::function<std::vector<std::string>(cv::cuda::GpuMat &)>, std::function<std::map<cv::Rect, ImageType, RectComparator>(cv::cuda::GpuMat &)>> &callback) {
+void getPDFImages(const std::filesystem::path &inputFilePath, const std::filesystem::path &outputFileDirectory, const std::variant<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>, std::function<std::map<cv::Rect, ImageType, RectComparator>(cv::cuda::GpuMat &)>> &callback) {
   GhostscriptHandler ghostscriptHandler(outputFileDirectory, callback);
   //BENCHMARK
   //auto startTime = std::chrono::high_resolution_clock::now();

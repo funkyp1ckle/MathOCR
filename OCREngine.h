@@ -9,6 +9,7 @@
 #include <string>
 
 #include "tesseract/baseapi.h"
+#include "utils.h"
 #include <opencv2/core/cuda.hpp>
 #include <torch/torch.h>
 
@@ -29,7 +30,8 @@ class DataSet : public torch::data::datasets::Dataset<DataSet> {
 public:
   enum class OCRMode {
     TRAIN,
-    VAL
+    VAL,
+    TEST
   };
   explicit DataSet(std::filesystem::path inputPath, OCRMode mode);
   torch::data::Example<> get(size_t idx) override;//{ return {.first, data[(long long) idx]}; }
@@ -146,7 +148,7 @@ class OCREngine {
 public:
   static std::string toLatex(const cv::cuda::GpuMat &pixels);
   static std::string toText(const cv::cuda::GpuMat &pixels);
-  static std::string toTable(const std::vector<std::string> &items);
+  static std::string toTable(const std::map<cv::Rect, ImageType, RectComparator> &items, const std::filesystem::path &path);
   static std::string toImage(const cv::cuda::GpuMat &pixels);
 };
 

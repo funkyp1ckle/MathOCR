@@ -14,22 +14,28 @@
 #include <torch_tensorrt/torch_tensorrt.h>
 
 DataSet::DataSet(std::filesystem::path inputPath, OCRMode mode) : mode(mode) {
-  std::filesystem::path basePath(std::move(inputPath));
+  std::filesystem::path trainingFile(std::move(inputPath));
   switch(mode) {
     case OCRMode::TRAIN:
-      basePath /= "train";
+      trainingFile /= "im2latex_train.lst";
       break;
     case OCRMode::VAL:
-      basePath /= "valid";
+      trainingFile /= "im2latex_validate.lst";
+      break;
+    case OCRMode::TEST:
+      trainingFile /= "im2latex_test.lst";
       break;
     default:
       std::cerr << "Invalid Mode" << std::endl;
       exit(INVALID_PARAMETER);
   }
-  for (const auto &entry: std::filesystem::directory_iterator(basePath)) {
-    std::string path = entry.path().generic_string();
-    files.emplace_back(path.substr(0, path.rfind('.')));
+  std::ifstream trainStream(trainingFile);
+  if(!trainStream) {
+    std::cerr << "Training file " << trainingFile.generic_string() << " does not exist" << std::endl;
+    exit(READ_ERROR);
   }
+
+
 }
 
 torch::data::Example<> DataSet::get(size_t idx) {
@@ -470,7 +476,7 @@ std::string OCREngine::toText(const cv::cuda::GpuMat &pixels) {
   return tesseract.doOCR(pixels);
 }
 
-std::string OCREngine::toTable(const std::vector<std::string> &items) {
+std::string OCREngine::toTable(const std::map<cv::Rect, ImageType, RectComparator> &items) {
   return std::string(); //TODO: LOOK AT TABLE SYNTAX
 }
 

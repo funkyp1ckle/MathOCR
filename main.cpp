@@ -1,6 +1,5 @@
-#include <filesystem>
-#include <iostream>
 #include <opencv2/cudawarping.hpp>
+#include <opencv2/highgui.hpp>
 
 #include "utils.h"
 
@@ -14,27 +13,43 @@ const std::string VERSION = "0.1";
 
 Options settings;
 
-void preprocess(cv::cuda::GpuMat &pixels) {
-  ImageUtils::equalize(pixels);
+void printHelp() {
+  std::cout << "usage: MathOCR [-v | --version]\n[-h | --help]\n[PDF or IMAGE PATH] [OUTPUT DIRECTORY]\npreprocess [PDF OR IMAGE PATH]\ntrain [dataFolder][epochs][learningRate]" << std::endl;
+}
+
+std::map<cv::Rect, ImageType, RectComparator> preprocess(cv::cuda::GpuMat &pixels) {
   ImageUtils::threshold(pixels);
-  ImageUtils::denoise(pixels);
   ImageUtils::crop(pixels);
+  std::map<cv::Rect, ImageType, RectComparator> imageBlocks = ImageUtils::getImageBlocks(pixels);
   if (settings.deskew) {
-    std::map<cv::Rect, ImageType, RectComparator> imageBlocks = ImageUtils::getImageBlocks(pixels);
     float skewSum = 0;
     for (auto itr = imageBlocks.begin(); itr != imageBlocks.end(); ++itr)
       skewSum += ImageUtils::getSkewAngle(pixels(itr->first), itr->second);
     ImageUtils::rotate(pixels, skewSum / (float) imageBlocks.size());
   }
+  return imageBlocks;
 }
 
-std::string imgToLatex(cv::cuda::GpuMat &pixels, OCREngine &ocr) {
-  preprocess(pixels);
-  return ocr->toLatex(pixels);
+std::vector<std::string> imgToLatex(cv::cuda::GpuMat &pixels) {
+  std::map<cv::Rect, ImageType, RectComparator> imageBlocks = preprocess(pixels);
+  std::vector<std::string> latexStrs;
+  //TODO: ADD LOGIC TO MERGE TEXT INTO ONE STR UNTIL IT HITS ANOTHER TYPE
+  for(auto itr = imageBlocks.begin(); itr != imageBlocks.end(); ++itr) {
+    cv::cuda::GpuMat roi = pixels(itr->first);
+    if(itr->second == MATH)
+      latexStrs.emplace_back(OCREngine::toLatex(roi));
+    else if(itr->second == TEXT)
+      latexStrs.emplace_back(OCREngine::toText(roi));
+    else if(itr->second == TABLE)
+      latexStrs.emplace_back(OCREngine::toTable(imgToLatex(roi)));
+    else
+      latexStrs.emplace_back(OCREngine::toImage(roi));
+  }
+  return latexStrs;
 }
 
-void imgToLatex(cv::cuda::GpuMat &pixels, OCREngine &ocr, const std::string &outputPrefix) {
-  std::string output = imgToLatex(pixels, ocr);
+void imgToLatex(cv::cuda::GpuMat &pixels, const std::filesystem::path &outputPrefix) {
+  std::vector<std::string> output = imgToLatex(pixels);
   //TODO: ADD OUTPUT HANDLING
 }
 
@@ -58,69 +73,41 @@ int main(int argc, char **argv) {
   } else if (argOne == "v" || argOne == "version") {
     std::cout << "MathOCR version: " << VERSION << std::endl;
   } else if (argOne == "train") {
-    OCREngine ocr;
-    ocr->to(torch::kCUDA);
-    std::string dataDirectory(argv[2]);
-    winToNixFilePath(dataDirectory);
+    std::filesystem::path dataDirectory(argv[2]);
+    LatexOCREngine latexOCR;
+    latexOCR->to(torch::kCUDA);
     unsigned long epoch = std::stoul(argv[3]);
     float learningRate = std::stof(argv[4]);
-    ocr->train(dataDirectory, epoch, learningRate);
-    ocr->exportWeights("../models/ocr.pt");
+    DataSet dataset(dataDirectory, DataSet::OCRMode::TRAIN);
+    latexOCR->train(dataset, epoch, learningRate);
+    latexOCR->exportWeights("../models/ocr.pt");
   } else if (argOne == "preprocess") {
-    std::string inputFilePath(argv[2]);
-    winToNixFilePath(inputFilePath);
-    std::string outputDirectory(argv[3]);
-    winToNixFilePath(outputDirectory);
+    std::filesystem::path inputFilePath(argv[2]);
+    std::filesystem::path outputDirectory(argv[3]);
     settings.deskew = std::stoi(argv[4]) != 0;
-    std::string fileType = inputFilePath.substr(inputFilePath.rfind('.') + 1);
-    if(fileType == "pdf") {
-      std::function<void(cv::cuda::GpuMat &)> bindedCallback = std::bind(static_cast<void(&)(cv::cuda::GpuMat &)>(preprocess), std::placeholders::_1);
+    std::filesystem::path fileType = inputFilePath.extension();
+    if(fileType == ".pdf") {
+      std::function<std::map<cv::Rect, ImageType, RectComparator>(cv::cuda::GpuMat &)> bindedCallback = std::bind(static_cast<std::map<cv::Rect, ImageType, RectComparator>(&)(cv::cuda::GpuMat &)>(preprocess), std::placeholders::_1);
       getPDFImages(inputFilePath, outputDirectory, bindedCallback);
-    } else if(fileType != "jpeg" && fileType != "jpg" && fileType != "png") {
+    } else {
       std::cerr << "invalid input format" << std::endl;
       exit(INVALID_PARAMETER);
-    } else {
-      cv::cuda::GpuMat pixels(cv::imread(inputFilePath, cv::IMREAD_GRAYSCALE));
-      preprocess(pixels);
-      cv::cuda::resize(pixels, pixels, cv::Size(640, 640), cv::INTER_AREA);
-      cv::Mat out(pixels);
-      cv::imwrite( outputDirectory + "/img.png", out);
     }
   } else {
     if (argc < 3) {
       std::cerr << "There are not enough parameters supplied, use -help for usage" << std::endl;
       exit(INVALID_PARAMETER_COUNT);
     }
-    std::string inputFilePath(argv[1]);
-    winToNixFilePath(inputFilePath);
-    std::string outputDirectory(argv[2]);
-    winToNixFilePath(outputDirectory);
-    size_t slashIdx = inputFilePath.rfind('/');
-    size_t dotIdx = inputFilePath.rfind('.');
-    std::string inputFileEnding = inputFilePath.substr(dotIdx + 1);
-    OCREngine ocr("weights.pth");
-    ocr->to(torch::kCUDA);
+    std::filesystem::path inputFilePath(argv[1]);
+    std::filesystem::path outputDirectory(argv[2]);
+    std::filesystem::path inputFileEnding = inputFilePath.extension();
     ImageUtils imgUtils;
-    if (inputFileEnding == "pdf") {
-      std::function<std::string(cv::cuda::GpuMat &)> bindedCallback = std::bind(static_cast<std::string(&)(cv::cuda::GpuMat &, OCREngine&)>(imgToLatex), std::placeholders::_1, ocr);
+    if (inputFileEnding == ".pdf") {
+      std::function<std::vector<std::string>(cv::cuda::GpuMat &)> bindedCallback = std::bind(static_cast<std::vector<std::string>(&)(cv::cuda::GpuMat &)>(imgToLatex), std::placeholders::_1);
       getPDFImages(inputFilePath, outputDirectory, bindedCallback);
-    } else if (inputFileEnding != "jpeg" && inputFileEnding != "jpg" && inputFileEnding != "png") {
+    } else {
       std::cerr << "invalid input format" << std::endl;
       exit(INVALID_PARAMETER);
-    } else {
-      std::filesystem::copy_file(inputFilePath, outputDirectory, std::filesystem::copy_options::overwrite_existing);
-      outputDirectory += "/";
-      std::string imgPath = outputDirectory;
-      imgPath += inputFilePath.substr(slashIdx + 1);
-      cv::Mat imgCPU = cv::imread(imgPath, cv::IMREAD_GRAYSCALE);
-      cv::cuda::GpuMat img(imgCPU);
-      if (img.empty()) {
-        std::cerr << "Filed to read image file(" << imgPath << ") into cv::Mat" << std::endl;
-        exit(ALLOC_ERROR);
-      }
-      std::string outputPrefix = outputDirectory;
-      outputPrefix += inputFilePath.substr(slashIdx + 1, dotIdx - slashIdx - 1);
-      imgToLatex(img, ocr, outputPrefix);
     }
   }
   return 0;

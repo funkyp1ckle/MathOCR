@@ -11,9 +11,10 @@ Converts PDFs and images into tex
 - [Torch-TensorRT](https://github.com/pytorch/TensorRT)
 - [OpenCV](https://github.com/opencv/opencv) with [Contrib(for CUDA)](https://github.com/opencv/opencv_contrib)
 - [Ghostscript](https://ghostscript.com/releases/gsdnld.html)
-- [Latexpp (Katex)](https://github.com/goldsborough/latexpp)
+- [Katex](https://github.com/KaTeX/KaTeX)
 - [v8 JS Engine](https://github.com/v8/v8)
 - [wkhtmltox](https://wkhtmltopdf.org/downloads.html)
+- [Tesseract](https://github.com/tesseract-ocr/tesseract)
 
 ### Models
 - [YoloV8](https://github.com/ultralytics/ultralytics) - deskew

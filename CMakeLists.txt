@@ -15,8 +15,28 @@ set(GHOSTSCRIPT_ROOT ${CMAKE_SOURCE_DIR}/ghostscript)
 set(WKHTMLTOX_ROOT ${CMAKE_SOURCE_DIR}/wkhtmltox)
 set(V8_ROOT ${CMAKE_SOURCE_DIR}/v8)
 set(TORCH_ROOT ${Torch_DIR}/../../..)
+set(TESSERACT_ROOT ${CMAKE_SOURCE_DIR}/tesseract)
 
 set(WKHTMLTOX_LIBRARIES ${WKHTMLTOX_ROOT}/lib/libwkhtmltox.a)
+set(TESSERACT_RUNTIME_LIBRARIES ${TESSERACT_ROOT}/lib/org.sw.demo.google.tesseract.libtesseract-5.3.1.dll
+        ${TESSERACT_ROOT}/lib/org.sw.demo.danbloomberg.leptonica-1.83.1.dll
+        ${TESSERACT_ROOT}/lib/org.sw.demo.libarchive.libarchive-3.6.2.dll
+        ${TESSERACT_ROOT}/lib/org.sw.demo.gif-5.2.1.dll
+        ${TESSERACT_ROOT}/lib/org.sw.demo.glennrp.png-1.6.39.dll
+        ${TESSERACT_ROOT}/lib/org.sw.demo.jpeg-9.5.0.dll
+        ${TESSERACT_ROOT}/lib/org.sw.demo.uclouvain.openjpeg.openjp2-2.5.0.dll
+        ${TESSERACT_ROOT}/lib/org.sw.demo.bzip2-1.0.8.dll
+        ${TESSERACT_ROOT}/lib/org.sw.demo.madler.zlib-1.2.13.dll
+        ${TESSERACT_ROOT}/lib/org.sw.demo.tiff-4.5.0.dll
+        ${TESSERACT_ROOT}/lib/org.sw.demo.webmproject.webp-1.2.4.dll
+        ${TESSERACT_ROOT}/lib/org.sw.demo.lz4-1.9.4.dll
+        ${TESSERACT_ROOT}/lib/org.sw.demo.madler.zlib-1.2.13.dll
+        ${TESSERACT_ROOT}/lib/org.sw.demo.oberhumer.lzo.lzo-2.10.0.dll
+        ${TESSERACT_ROOT}/lib/org.sw.demo.xmlsoft.libxml2-2.9.14.dll
+        ${TESSERACT_ROOT}/lib/org.sw.demo.xz_utils.lzma-5.4.1.dll
+        ${TESSERACT_ROOT}/lib/org.sw.demo.gnu.iconv.libiconv-1.16.0.dll
+        ${TESSERACT_ROOT}/lib/org.sw.demo.gnu.iconv.libcharset-1.16.0.dll
+        ${TESSERACT_ROOT}/lib/org.sw.demo.facebook.zstd.zstd-1.5.5.dll)
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(V8_LINK_LIBRARIES ${V8_ROOT}/lib/debug/v8.dll.lib
@@ -35,7 +55,8 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
             ${OpenCV_DIR}/opencv_cudaarithm460d.lib
             ${OpenCV_DIR}/opencv_cudafilters460d.lib
             ${OpenCV_DIR}/opencv_cudaimgproc460d.lib
-            ${OpenCV_DIR}/opencv_cudawarping460d.lib)
+            ${OpenCV_DIR}/opencv_cudawarping460d.lib
+            ${OpenCV_DIR}/opencv_highgui460d.lib)
     set(OpenCV_RUNTIME_LIBRARIES ${OpenCV_DIR}/../bin/opencv_core460d.dll
             ${OpenCV_DIR}/../bin/opencv_imgcodecs460d.dll
             ${OpenCV_DIR}/../bin/opencv_imgproc460d.dll
@@ -43,7 +64,9 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
             ${OpenCV_DIR}/../bin/opencv_cudaarithm460d.dll
             ${OpenCV_DIR}/../bin/opencv_cudafilters460d.dll
             ${OpenCV_DIR}/../bin/opencv_cudaimgproc460d.dll
-            ${OpenCV_DIR}/../bin/opencv_cudawarping460d.dll)
+            ${OpenCV_DIR}/../bin/opencv_cudawarping460d.dll
+            ${OpenCV_DIR}/../bin/opencv_highgui460d.dll
+            ${OpenCV_DIR}/../bin/opencv_videoio460d.dll)
     set(TORCH_RUNTIME_LIBRARIES ${TORCH_ROOT}/lib/debug/asmjit.dll ${TORCH_ROOT}/lib/debug/c10.dll ${TORCH_ROOT}/lib/debug/c10_cuda.dll
             ${TORCH_ROOT}/lib/debug/caffe2_nvrtc.dll ${TORCH_ROOT}/lib/debug/cublas64_11.dll ${TORCH_ROOT}/lib/debug/cublasLt64_11.dll
             ${TORCH_ROOT}/lib/debug/cudart64_110.dll ${TORCH_ROOT}/lib/debug/cudnn64_8.dll ${TORCH_ROOT}/lib/debug/cudnn_adv_infer64_8.dll
@@ -76,7 +99,8 @@ else()
             ${OpenCV_DIR}/opencv_cudaarithm460.lib
             ${OpenCV_DIR}/opencv_cudafilters460.lib
             ${OpenCV_DIR}/opencv_cudaimgproc460.lib
-            ${OpenCV_DIR}/opencv_cudawarping460.lib)
+            ${OpenCV_DIR}/opencv_cudawarping460.lib
+            ${OpenCV_DIR}/opencv_highgui460.lib)
     set(OpenCV_RUNTIME_LIBRARIES ${OpenCV_DIR}/../bin/opencv_core460.dll
             ${OpenCV_DIR}/../bin/opencv_imgcodecs460.dll
             ${OpenCV_DIR}/../bin/opencv_imgproc460.dll
@@ -84,7 +108,9 @@ else()
             ${OpenCV_DIR}/../bin/opencv_cudaarithm460.dll
             ${OpenCV_DIR}/../bin/opencv_cudafilters460.dll
             ${OpenCV_DIR}/../bin/opencv_cudaimgproc460.dll
-            ${OpenCV_DIR}/../bin/opencv_cudawarping460.dll)
+            ${OpenCV_DIR}/../bin/opencv_cudawarping460.dll
+            ${OpenCV_DIR}/../bin/opencv_highgui460.dll
+            ${OpenCV_DIR}/../bin/opencv_videoio460.dll)
     set(TORCH_RUNTIME_LIBRARIES ${TORCH_ROOT}/lib/release/asmjit.dll ${TORCH_ROOT}/lib/release/c10.dll ${TORCH_ROOT}/lib/release/c10_cuda.dll
             ${TORCH_ROOT}/lib/release/caffe2_nvrtc.dll ${TORCH_ROOT}/lib/release/cublas64_11.dll ${TORCH_ROOT}/lib/release/cublasLt64_11.dll
             ${TORCH_ROOT}/lib/release/cudart64_110.dll ${TORCH_ROOT}/lib/release/cudnn64_8.dll ${TORCH_ROOT}/lib/release/cudnn_adv_infer64_8.dll
@@ -103,10 +129,10 @@ else()
     list(APPEND TORCH_LIBRARIES ${TORCH_ROOT}/lib/release/torchtrt.lib)
 endif()
 
-add_executable(MathOCR main.cpp latexpp/latex.cpp utils.cpp OCREngine.cpp)
-target_include_directories(MathOCR PUBLIC ${OpenCV_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS} ${V8_ROOT} ${V8_ROOT}/include ${WKHTMLTOX_ROOT}/include)
+add_executable(MathOCR main.cpp utils.cpp OCREngine.cpp)
+target_include_directories(MathOCR PUBLIC ${OpenCV_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS} ${V8_ROOT} ${V8_ROOT}/include ${WKHTMLTOX_ROOT}/include ${TESSERACT_ROOT}/include)
 target_compile_definitions(MathOCR PUBLIC V8_ENABLE_SANDBOX V8_COMPRESS_POINTERS _WIN32_WINNT=0x0601)
-target_link_libraries(MathOCR PUBLIC ${TORCH_LIBRARIES} ${Boost_LIBRARIES} ${OpenCV_LINK_LIBRARIES} ${V8_LINK_LIBRARIES} ${WKHTMLTOX_LIBRARIES})
+target_link_libraries(MathOCR PUBLIC ${TORCH_LIBRARIES} ${Boost_LIBRARIES} ${OpenCV_LINK_LIBRARIES} ${V8_LINK_LIBRARIES} ${WKHTMLTOX_LIBRARIES} ${TESSERACT_ROOT}/lib/org.sw.demo.google.tesseract.libtesseract-5.3.1.lib)
 
 add_custom_command(TARGET MathOCR POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${OpenCV_RUNTIME_LIBRARIES}
@@ -114,6 +140,8 @@ add_custom_command(TARGET MathOCR POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if
         ${TORCH_RUNTIME_LIBRARIES}
         ${WKHTMLTOX_ROOT}/lib/wkhtmltox.dll
         ${GHOSTSCRIPT_ROOT}/ghostscript.exe ${GHOSTSCRIPT_ROOT}/gsdll64.dll
+        ${TESSERACT_RUNTIME_LIBRARIES}
+        ${TESSERACT_ROOT}/tessdata/eng.traineddata
         ${CMAKE_SOURCE_DIR}/models/classify.torchscript
         $<TARGET_FILE_DIR:MathOCR>)
 

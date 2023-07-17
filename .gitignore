@@ -2,8 +2,8 @@
 /cmake-build-release/
 /ghostscript/
 /katex/
-/latexpp/
 /v8/
 /wkhtmltox/
 /.clang-format
 /models/
+/tesseract/

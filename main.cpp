@@ -17,10 +17,10 @@ void printHelp() {
   std::cout << "usage: MathOCR [-v | --version]\n[-h | --help]\n[PDF or IMAGE PATH] [OUTPUT DIRECTORY]\npreprocess [PDF OR IMAGE PATH]\ntrain [dataFolder][epochs][learningRate]" << std::endl;
 }
 
-std::map<cv::Rect, ImageType, RectComparator> preprocess(cv::cuda::GpuMat &pixels) {
+std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator> preprocess(cv::cuda::GpuMat &pixels) {
   ImageUtils::threshold(pixels);
   ImageUtils::crop(pixels);
-  std::map<cv::Rect, ImageType, RectComparator> imageBlocks = ImageUtils::getImageBlocks(pixels);
+  std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator> imageBlocks = ImageUtils::getImageBlocks(pixels);
   if (settings.deskew) {
     float skewSum = 0;
     for (auto itr = imageBlocks.begin(); itr != imageBlocks.end(); ++itr)
@@ -31,17 +31,17 @@ std::map<cv::Rect, ImageType, RectComparator> preprocess(cv::cuda::GpuMat &pixel
 }
 
 void imgToLatex(cv::cuda::GpuMat &pixels, const std::filesystem::path &outputPrefix) {
-  std::map<cv::Rect, ImageType, RectComparator> imageBlocks = preprocess(pixels);
+  std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator> imageBlocks = preprocess(pixels);
   std::vector<std::string> latexStrs;
   //TODO: ADD LOGIC TO MERGE TEXT INTO ONE STR UNTIL IT HITS ANOTHER TYPE
   for(auto itr = imageBlocks.begin(); itr != imageBlocks.end(); ++itr) {
     cv::cuda::GpuMat roi = pixels(itr->first);
-    if(itr->second == MATH) {
+    if(itr->second == Classifier::ImageType::MATH) {
       latexStrs.emplace_back(OCREngine::toLatex(roi));
-    } else if(itr->second == TEXT) {
+    } else if(itr->second == Classifier::ImageType::TEXT) {
       latexStrs.emplace_back(OCREngine::toText(roi));
-    } else if(itr->second == TABLE) {
-      std::map<cv::Rect, ImageType, RectComparator> tableBlocks = ImageUtils::getImageBlocks(roi);
+    } else if(itr->second == Classifier::ImageType::TABLE) {
+      std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator> tableBlocks = ImageUtils::getImageBlocks(roi);
       latexStrs.emplace_back(OCREngine::toTable(tableBlocks, outputPrefix));
     } else {
       latexStrs.emplace_back(OCREngine::toImage(roi));
@@ -73,10 +73,11 @@ int main(int argc, char **argv) {
     std::filesystem::path dataDirectory(argv[2]);
     LatexOCREngine latexOCR;
     latexOCR->to(torch::kCUDA);
-    unsigned long epoch = std::stoul(argv[3]);
-    float learningRate = std::stof(argv[4]);
+    int batchSize = std::stoi(argv[3]);
+    unsigned long epoch = std::stoul(argv[4]);
+    float learningRate = std::stof(argv[5]);
     DataSet dataset(dataDirectory, DataSet::OCRMode::TRAIN);
-    latexOCR->train(dataset, epoch, learningRate);
+    latexOCR->train(dataset, batchSize, epoch, learningRate);
     latexOCR->exportWeights("../models/ocr.pt");
   } else if (argOne == "preprocess") {
     std::filesystem::path inputFilePath(argv[2]);
@@ -84,7 +85,7 @@ int main(int argc, char **argv) {
     settings.deskew = std::stoi(argv[4]) != 0;
     std::filesystem::path fileType = inputFilePath.extension();
     if(fileType == ".pdf") {
-      std::function<std::map<cv::Rect, ImageType, RectComparator>(cv::cuda::GpuMat &)> bindedCallback = std::bind(static_cast<std::map<cv::Rect, ImageType, RectComparator>(&)(cv::cuda::GpuMat &)>(preprocess), std::placeholders::_1);
+      std::function<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(cv::cuda::GpuMat &)> bindedCallback = std::bind(static_cast<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(&)(cv::cuda::GpuMat &)>(preprocess), std::placeholders::_1);
       getPDFImages(inputFilePath, outputDirectory, bindedCallback);
     } else {
       std::cerr << "invalid input format" << std::endl;

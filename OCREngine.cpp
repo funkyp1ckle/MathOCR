@@ -13,7 +13,7 @@
 #include <torch_tensorrt/logging.h>
 #include <torch_tensorrt/torch_tensorrt.h>
 
-DataSet::DataSet(std::filesystem::path inputPath, OCRMode mode) : mode(mode) {
+DataSet::DataSet(std::filesystem::path inputPath, OCRMode mode) : mode(mode), formulasFile(inputPath / "im2latex_formulas.lst"), formulasFolder(inputPath / "formula_images") {
   std::filesystem::path trainingFile(std::move(inputPath));
   switch(mode) {
     case OCRMode::TRAIN:
@@ -34,25 +34,50 @@ DataSet::DataSet(std::filesystem::path inputPath, OCRMode mode) : mode(mode) {
     std::cerr << "Training file " << trainingFile.generic_string() << " does not exist" << std::endl;
     exit(READ_ERROR);
   }
+  int lineNum;
+  std::string fileName;
+  while(trainStream >> lineNum >> fileName)
+    itemLocations.emplace_back(lineNum, formulasFolder / fileName += ".png");
+}
 
+torch::data::Example<> DataSet::Collate::apply_batch(std::vector<torch::data::Example<>> data) {
+  int64_t maxW = 0;
+  int64_t maxH = 0;
+  for(torch::data::Example<>& item : data) {
+    if(item.data.size(2) > maxH)
+      maxH = item.data.size(2);
+    if(item.data.size(3) > maxW)
+      maxW = item.data.size(3);
+  }
 
+  std::vector<torch::Tensor> imgs, lbls;
+  imgs.reserve(data.size());
+  lbls.reserve(data.size());
+  for(torch::data::Example<>& item : data) {
+    torch::nn::ConstantPad1d lblPadFunc(torch::nn::ConstantPad1dOptions({0, MAX_LABEL_LEN - item.target.size(0)}, 0));
+    torch::nn::ConstantPad2d imgPadFunc(
+        torch::nn::ConstantPad2dOptions({0, maxW - item.data.size(3), 0, maxH - item.data.size(2)}, 0));
+
+    item.target = lblPadFunc(item.target);
+    item.data = imgPadFunc(item.data.squeeze(0));
+
+    imgs.emplace_back(item.data);
+    lbls.emplace_back(item.target);
+  }
+  return {torch::stack(imgs), torch::stack(lbls)};
 }
 
 torch::data::Example<> DataSet::get(size_t idx) {
-  std::string inputDir = files[idx];
+  std::pair<int, std::filesystem::path> itemLocation = itemLocations[idx];
 
-  OCRUtils::normalizeLatex(inputDir + ".tex");
-  std::ifstream texStream(inputDir + ".tex");
-  if (!texStream) {
-    std::cerr << "Tex file cannot be read from path(" << inputDir << ".tex"
-              << ")" << std::endl;
-    exit(READ_ERROR);
-  }
-  std::stringstream buffer;
-  buffer << texStream.rdbuf();
-  std::string tex = buffer.str();
+  std::ifstream texStream(formulasFile);
+  int len = itemLocation.first - 1;
+  for(int i = 0; i < len; ++i)
+    texStream.ignore(std::numeric_limits<std::streamsize>::max(),'\n');
+  std::string tex;
+  std::getline(texStream, tex);
 
-  cv::cuda::GpuMat imgMat(cv::imread(inputDir + ".png", cv::IMREAD_GRAYSCALE));
+  cv::cuda::GpuMat imgMat(cv::imread(itemLocation.second.generic_string(), cv::IMREAD_GRAYSCALE));
   torch::Tensor imageTensor = ImageUtils::toTensor(imgMat, torch::kByte);
 
   torch::Tensor labelTensor = OCRUtils::toTensor(tex);
@@ -294,7 +319,7 @@ LatexOCREngineImpl::LatexOCREngineImpl(const std::string &modelPath) {
 torch::Tensor LatexOCREngineImpl::forward(torch::Tensor input, int64_t beamSize) {
   int64_t vocabSize = decoder->vocabSize;
   torch::NoGradGuard no_grad;
-  torch::Tensor encoderOut = encoder->forward(input);
+  torch::Tensor encoderOut = encoder->forward(std::move(input));
   int64_t encW = encoderOut.size(2);
   int64_t encH = encoderOut.size(3);
   int64_t encoderDim = encoderOut.size(1);
@@ -381,13 +406,12 @@ torch::Tensor LatexOCREngineImpl::forward(torch::Tensor input, int64_t beamSize)
   return seq;
 }
 
-void LatexOCREngineImpl::train(DataSet &dataset, size_t epoch, float learningRate) {
+void LatexOCREngineImpl::train(DataSet dataset, int batchSize, size_t epoch, float learningRate) {
   decoder->train();
   encoder->train();
 
   namespace data = torch::data;
-  auto dataLoader = data::make_data_loader<data::samplers::SequentialSampler>(std::move(dataset)
-                                                                                  .map(data::transforms::Stack<>()), 64);
+  auto dataLoader = data::make_data_loader<data::samplers::RandomSampler>(std::move(dataset.map(DataSet::Collate())), data::DataLoaderOptions(16).workers(2));
 
   auto start = std::chrono::high_resolution_clock::now();
   torch::optim::Adam optimizer(this->parameters(), learningRate);
@@ -415,13 +439,12 @@ void LatexOCREngineImpl::test(const std::filesystem::path &dataDirectory) {
 
   DataSet dataset(dataDirectory, DataSet::OCRMode::VAL);
   namespace data = torch::data;
-  auto data_loader = data::make_data_loader<data::samplers::SequentialSampler>(std::move(dataset)
-                                                                                   .map(data::transforms::Stack<>()),
-                                                                               64);
+  auto dataLoader = data::make_data_loader<data::samplers::RandomSampler>(std::move(dataset.map(DataSet::Collate())), data::DataLoaderOptions(16).workers(2));
+
   size_t total = 0;
   size_t counter = 0;
   torch::NoGradGuard no_grad;
-  for (auto &batch: *data_loader) {
+  for (auto &batch: *dataLoader) {
     batch.data.to(torch::kCUDA);
     torch::Tensor output = forward(batch.data, 5);
     torch::Tensor prediction = std::get<1>(output.max(2)).transpose(1, 0).contiguous().view(-1).to(torch::kCPU);
@@ -476,7 +499,7 @@ std::string OCREngine::toText(const cv::cuda::GpuMat &pixels) {
   return tesseract.doOCR(pixels);
 }
 
-std::string OCREngine::toTable(const std::map<cv::Rect, ImageType, RectComparator> &items) {
+std::string OCREngine::toTable(const std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator> &items, const std::filesystem::path &path) {
   return std::string(); //TODO: LOOK AT TABLE SYNTAX
 }
 

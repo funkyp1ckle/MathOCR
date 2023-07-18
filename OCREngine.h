@@ -9,7 +9,6 @@
 #include <string>
 
 #include "tesseract/baseapi.h"
-#include "utils.h"
 #include <opencv2/core/cuda.hpp>
 #include <torch/torch.h>
 
@@ -19,6 +18,24 @@ extern const int PROCESSING_ERROR;
 
 class Classifier {
 public:
+  enum class ImageType {
+    TEXT = 0,
+    MATH = 1,
+    IMAGE = 2,
+    TABLE = 3
+  };
+
+  struct RectComparator {
+    bool operator()(const cv::Rect &rect1, const cv::Rect &rect2) const {
+      if (rect1.y < rect2.y)
+        return true;
+      else if (rect1.y > rect2.y)
+        return false;
+      else
+        return rect1.x < rect2.x;
+    }
+  };
+
   Classifier();
   torch::Tensor forward(const torch::Tensor &input);
 
@@ -28,19 +45,29 @@ private:
 
 class DataSet : public torch::data::datasets::Dataset<DataSet> {
 public:
+  const static int MAX_LABEL_LEN = 997;
+
   enum class OCRMode {
     TRAIN,
     VAL,
     TEST
   };
+
+  struct Collate : public torch::data::transforms::Collation<torch::data::Example<torch::Tensor, torch::Tensor>,
+                                                             std::vector<torch::data::Example<torch::Tensor, torch::Tensor>>> {
+    torch::data::Example<torch::Tensor, torch::Tensor> apply_batch(std::vector<torch::data::Example<torch::Tensor, torch::Tensor>> data) override;
+  };
+
   explicit DataSet(std::filesystem::path inputPath, OCRMode mode);
   torch::data::Example<> get(size_t idx) override;//{ return {.first, data[(long long) idx]}; }
   torch::data::Example<> operator[](size_t idx) { return get(idx); }
-  torch::optional<size_t> size() const override { return files.size(); }
+  torch::optional<size_t> size() const override { return itemLocations.size(); }
 
 private:
   OCRMode mode;
-  std::vector<std::string> files;
+  std::filesystem::path formulasFile;
+  std::filesystem::path formulasFolder;
+  std::vector<std::pair<int, std::filesystem::path>> itemLocations;
 };
 
 //VGG16 + 2D Positional Encoding
@@ -121,7 +148,7 @@ public:
 
   torch::Tensor forward(torch::Tensor input, int64_t beamSize);
 
-  void train(DataSet &dataset, size_t epoch, float learningRate);
+  void train(DataSet dataset, int batchSize, size_t epoch, float learningRate);
   void test(const std::filesystem::path &dataDirectory);
   void exportWeights(const std::filesystem::path &outputPath);
 
@@ -138,7 +165,7 @@ public:
   TesseractOCREngine();
   ~TesseractOCREngine();
 
-  std::string doOCR(const cv::cuda::GpuMat &pixels);
+  static std::string doOCR(const cv::cuda::GpuMat &pixels);
 
 private:
   static inline tesseract::TessBaseAPI *api;
@@ -148,7 +175,7 @@ class OCREngine {
 public:
   static std::string toLatex(const cv::cuda::GpuMat &pixels);
   static std::string toText(const cv::cuda::GpuMat &pixels);
-  static std::string toTable(const std::map<cv::Rect, ImageType, RectComparator> &items, const std::filesystem::path &path);
+  static std::string toTable(const std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator> &items, const std::filesystem::path &path);
   static std::string toImage(const cv::cuda::GpuMat &pixels);
 };
 

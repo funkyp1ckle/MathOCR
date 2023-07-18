@@ -189,7 +189,7 @@ void ImageUtils::addMargin(const cv::cuda::GpuMat &pixels, cv::Rect_<int> &rect,
   rect.height = rect.y + rect.height + (2 * margin) >= pixels.rows ? pixels.rows - rect.y : rect.height + (2 * margin);
 }
 
-std::map<cv::Rect, ImageType, RectComparator> ImageUtils::getImageBlocks(const cv::cuda::GpuMat &pixels) {
+std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator> ImageUtils::getImageBlocks(const cv::cuda::GpuMat &pixels) {
   static cv::cuda::GpuMat resized;
   constexpr float confThres = 0.25f;
   constexpr float iouThres = 0.5f;
@@ -202,7 +202,7 @@ std::map<cv::Rect, ImageType, RectComparator> ImageUtils::getImageBlocks(const c
   torch::Tensor imgTensor = toTensor(resized, torch::kByte).contiguous().to(torch::kFloat).div(255).expand({1, 3, -1, -1});
   static Classifier imgClassification;
   torch::Tensor prediction = imgClassification.forward(imgTensor).to(torch::kCUDA);
-  std::map<cv::Rect, ImageType, RectComparator> imageBlocks;
+  std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator> imageBlocks;
 
   auto conf_mask = prediction.select(2, 4) > confThres;
 
@@ -282,15 +282,15 @@ std::map<cv::Rect, ImageType, RectComparator> ImageUtils::getImageBlocks(const c
 
     //cv::rectangle(test, rect, cv::Scalar(255, 255, 255), 3);
 
-    std::pair<cv::Rect, ImageType> pair = std::make_pair(rect, static_cast<ImageType>(output[i][5].item<int>()));
+    std::pair<cv::Rect, Classifier::ImageType> pair = std::make_pair(rect, static_cast<Classifier::ImageType>(output[i][5].item<int>()));
     if (rect.area())
       imageBlocks.emplace(pair);
   }
   return imageBlocks;
 }
 
-float ImageUtils::getSkewAngle(const cv::cuda::GpuMat &pixels, const ImageType &type) {
-  if (type == TABLE || type == IMAGE) {
+float ImageUtils::getSkewAngle(const cv::cuda::GpuMat &pixels, const Classifier::ImageType &type) {
+  if (type == Classifier::ImageType::TABLE || type == Classifier::ImageType::IMAGE) {
     cv::Mat img(pixels);
     std::vector<cv::Point> points;
     cv::Mat_<uchar>::iterator it = img.begin<uchar>();
@@ -357,11 +357,11 @@ void ImageUtils::threshold(cv::cuda::GpuMat &pixels) {
 
 GhostscriptHandler::GhostscriptHandler(std::filesystem::path outputFileDirectory,
                                        const std::variant<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>,
-                                                          std::function<std::map<cv::Rect, ImageType, RectComparator>(cv::cuda::GpuMat &)>> &callback) : callback(callback), ioContext(), asyncPipe(ioContext), outputFileDirectory(std::move(outputFileDirectory)), outputFormat("^Page [0-9]+\n$"), pageNum(0) {
+                                                          std::function<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(cv::cuda::GpuMat &)>> &callback) : callback(callback), ioContext(), asyncPipe(ioContext), outputFileDirectory(std::move(outputFileDirectory)), outputFormat("^Page [0-9]+\n$"), pageNum(0) {
   if (std::holds_alternative<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>>(callback))
-    callbackType = LATEX;
+    callbackType = CallbackType::LATEX;
   else
-    callbackType = PROCESS;
+    callbackType = CallbackType::PROCESS;
 }
 
 void GhostscriptHandler::run(const std::filesystem::path &inputFilePath) {
@@ -412,7 +412,7 @@ void GhostscriptHandler::processOutput() {
       std::cerr << "Failed to read image file(" << imgPath << ") into cv::Mat" << std::endl;
       exit(ALLOC_ERROR);
     }
-    if (callbackType == LATEX) {
+    if (callbackType == CallbackType::LATEX) {
       std::get<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>>(callback)(curImg, outputFileDirectory);
     } else {
       std::filesystem::path outputFilePath = outputFileDirectory;
@@ -420,7 +420,7 @@ void GhostscriptHandler::processOutput() {
       outputFilePath += "_page";
       outputFilePath += std::to_string(pageNum);
       outputFilePath += ".png";
-      std::get<std::function<std::map<cv::Rect, ImageType, RectComparator>(cv::cuda::GpuMat &)>>(callback)(curImg);
+      std::get<std::function<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(cv::cuda::GpuMat &)>>(callback)(curImg);
       cv::cuda::resize(curImg, curImg, cv::Size(640, 640), cv::INTER_AREA);
       cv::Mat out(curImg);
       cv::imwrite(outputFilePath.generic_string(), out);
@@ -435,7 +435,7 @@ int GhostscriptHandler::done() {
   return process.exit_code();
 }
 
-void getPDFImages(const std::filesystem::path &inputFilePath, const std::filesystem::path &outputFileDirectory, const std::variant<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>, std::function<std::map<cv::Rect, ImageType, RectComparator>(cv::cuda::GpuMat &)>> &callback) {
+void getPDFImages(const std::filesystem::path &inputFilePath, const std::filesystem::path &outputFileDirectory, const std::variant<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>, std::function<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(cv::cuda::GpuMat &)>> &callback) {
   GhostscriptHandler ghostscriptHandler(outputFileDirectory, callback);
   //BENCHMARK
   //auto startTime = std::chrono::high_resolution_clock::now();

@@ -24,6 +24,8 @@
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
 
+#include <torch/torch.h>
+
 #include <filesystem>
 #include <iostream>
 #include <regex>
@@ -32,35 +34,11 @@
 
 extern const int ALLOC_ERROR;
 
-
 struct Options {
   bool deskew = false;
 };
 
 extern Options settings;
-
-struct RectComparator {
-  bool operator()(const cv::Rect &rect1, const cv::Rect &rect2) const {
-    if (rect1.y < rect2.y)
-      return true;
-    else if (rect1.y > rect2.y)
-      return false;
-    else
-      return rect1.x < rect2.x;
-  }
-};
-
-enum ImageType {
-  TEXT = 0,
-  MATH = 1,
-  IMAGE = 2,
-  TABLE = 3
-};
-
-enum CallbackType {
-  LATEX,
-  PROCESS
-};
 
 class KatexHandler {
 public:
@@ -91,9 +69,14 @@ public:
 
 class GhostscriptHandler {
 public:
+  enum class CallbackType {
+    LATEX,
+    PROCESS
+  };
+
   GhostscriptHandler(std::filesystem::path outputFileDirectory,
                      const std::variant<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>,
-                     std::function<std::map<cv::Rect, ImageType, RectComparator>(cv::cuda::GpuMat &)>> &callback);
+                     std::function<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(cv::cuda::GpuMat &)>> &callback);
   void processOutput(const boost::system::error_code &ec, std::size_t size);
   void processOutput();
 
@@ -102,7 +85,7 @@ public:
   int done();
 
 private:
-  std::variant<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>, std::function<std::map<cv::Rect, ImageType, RectComparator>(cv::cuda::GpuMat &)>> callback;
+  std::variant<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>, std::function<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(cv::cuda::GpuMat &)>> callback;
   CallbackType callbackType;
   boost::asio::io_context ioContext;
   boost::process::async_pipe asyncPipe;
@@ -131,14 +114,14 @@ public:
   static void crop(cv::cuda::GpuMat &pixels);
   static void threshold(cv::cuda::GpuMat &pixels);
 
-  static std::map<cv::Rect, ImageType, RectComparator> getImageBlocks(const cv::cuda::GpuMat &pixels);
-  static float getSkewAngle(const cv::cuda::GpuMat &pixels, const ImageType &type);
+  static std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator> getImageBlocks(const cv::cuda::GpuMat &pixels);
+  static float getSkewAngle(const cv::cuda::GpuMat &pixels, const Classifier::ImageType &type);
   static void rotate(cv::cuda::GpuMat &pixels, float degree);
 };
 
 int clamp(int n, int lower, int upper);
 
 void getPDFImages(const std::filesystem::path &inputFilePath, const std::filesystem::path &outputFileDirectory,
-                  const std::variant<std::function<void(cv::cuda::GpuMat &, const std::string &)>,
-                 std::function<std::map<cv::Rect, ImageType, RectComparator>(cv::cuda::GpuMat &)>> &callback);
+                  const std::variant<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>,
+                 std::function<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(cv::cuda::GpuMat &)>> &callback);
 #endif//MATHOCR_UTILS_H

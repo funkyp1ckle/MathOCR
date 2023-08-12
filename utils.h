@@ -60,6 +60,8 @@ private:
 
 class OCRUtils {
 public:
+  static std::vector<cv::cuda::GpuMat> toMat(const torch::Tensor &tensor, bool isNormalized = false);
+
   static void normalizeLatex(const std::filesystem::path &file);
   static std::unordered_map<std::string, int> getVocabMap(const std::filesystem::path &dataDirectory);
 
@@ -106,10 +108,10 @@ private:
 
 class ImageUtils {
 public:
-  static cv::cuda::GpuMat toMat(const torch::Tensor &tensor, bool isNormalized, bool cvFormat);
   static torch::Tensor toTensor(const cv::cuda::GpuMat &matrix, torch::ScalarType size, int channels = 1);
   static void addMargin(const cv::cuda::GpuMat &pixels, cv::Rect_<int> &rect, int margin);
 
+  static void equalize(cv::cuda::GpuMat &pixels);
   static void denoise(cv::cuda::GpuMat &pixels);
   static void crop(cv::cuda::GpuMat &pixels);
   static void threshold(cv::cuda::GpuMat &pixels);

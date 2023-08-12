@@ -18,8 +18,10 @@ void printHelp() {
 }
 
 std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator> preprocess(cv::cuda::GpuMat &pixels) {
+  ImageUtils::equalize(pixels);
   ImageUtils::threshold(pixels);
   ImageUtils::crop(pixels);
+
   std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator> imageBlocks = ImageUtils::getImageBlocks(pixels);
   if (settings.deskew) {
     float skewSum = 0;
@@ -76,7 +78,7 @@ int main(int argc, char **argv) {
     int batchSize = std::stoi(argv[3]);
     unsigned long epoch = std::stoul(argv[4]);
     float learningRate = std::stof(argv[5]);
-    DataSet dataset(dataDirectory, DataSet::OCRMode::TRAIN);
+    LatexOCREngineImpl::DataSet dataset(dataDirectory, LatexOCREngineImpl::DataSet::OCRMode::TRAIN);
     latexOCR->train(dataset, batchSize, epoch, learningRate);
     latexOCR->exportWeights("../models/ocr.pt");
   } else if (argOne == "preprocess") {

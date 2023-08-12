@@ -18,25 +18,6 @@ set(TORCH_ROOT ${Torch_DIR}/../../..)
 set(TESSERACT_ROOT ${CMAKE_SOURCE_DIR}/tesseract)
 
 set(WKHTMLTOX_LIBRARIES ${WKHTMLTOX_ROOT}/lib/libwkhtmltox.a)
-set(TESSERACT_RUNTIME_LIBRARIES ${TESSERACT_ROOT}/lib/org.sw.demo.google.tesseract.libtesseract-5.3.1.dll
-        ${TESSERACT_ROOT}/lib/org.sw.demo.danbloomberg.leptonica-1.83.1.dll
-        ${TESSERACT_ROOT}/lib/org.sw.demo.libarchive.libarchive-3.6.2.dll
-        ${TESSERACT_ROOT}/lib/org.sw.demo.gif-5.2.1.dll
-        ${TESSERACT_ROOT}/lib/org.sw.demo.glennrp.png-1.6.39.dll
-        ${TESSERACT_ROOT}/lib/org.sw.demo.jpeg-9.5.0.dll
-        ${TESSERACT_ROOT}/lib/org.sw.demo.uclouvain.openjpeg.openjp2-2.5.0.dll
-        ${TESSERACT_ROOT}/lib/org.sw.demo.bzip2-1.0.8.dll
-        ${TESSERACT_ROOT}/lib/org.sw.demo.madler.zlib-1.2.13.dll
-        ${TESSERACT_ROOT}/lib/org.sw.demo.tiff-4.5.0.dll
-        ${TESSERACT_ROOT}/lib/org.sw.demo.webmproject.webp-1.2.4.dll
-        ${TESSERACT_ROOT}/lib/org.sw.demo.lz4-1.9.4.dll
-        ${TESSERACT_ROOT}/lib/org.sw.demo.madler.zlib-1.2.13.dll
-        ${TESSERACT_ROOT}/lib/org.sw.demo.oberhumer.lzo.lzo-2.10.0.dll
-        ${TESSERACT_ROOT}/lib/org.sw.demo.xmlsoft.libxml2-2.9.14.dll
-        ${TESSERACT_ROOT}/lib/org.sw.demo.xz_utils.lzma-5.4.1.dll
-        ${TESSERACT_ROOT}/lib/org.sw.demo.gnu.iconv.libiconv-1.16.0.dll
-        ${TESSERACT_ROOT}/lib/org.sw.demo.gnu.iconv.libcharset-1.16.0.dll
-        ${TESSERACT_ROOT}/lib/org.sw.demo.facebook.zstd.zstd-1.5.5.dll)
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(V8_LINK_LIBRARIES ${V8_ROOT}/lib/debug/v8.dll.lib
@@ -82,6 +63,25 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
             ${TORCH_ROOT}/lib/debug/torch_global_deps.dll ${TORCH_ROOT}/lib/debug/uv.dll ${TORCH_ROOT}/lib/debug/zlibwapi.dll
             ${TORCH_ROOT}/lib/debug/torchtrt.dll ${TORCH_ROOT}/lib/debug/nvinfer.dll ${TORCH_ROOT}/lib/debug/nvinfer_builder_resource.dll)
     list(APPEND TORCH_LIBRARIES ${TORCH_ROOT}/lib/debug/torchtrt.lib)
+    set(TESSERACT_RUNTIME_LIBRARIES ${TESSERACT_ROOT}/lib/debug/tesseract53d.dll
+            ${TESSERACT_ROOT}/lib/debug/archive.dll
+            ${TESSERACT_ROOT}/lib/debug/leptonica-1.83.1d.dll
+            ${TESSERACT_ROOT}/lib/debug/libcurl-d.dll
+            ${TESSERACT_ROOT}/lib/debug/bz2d.dll
+            ${TESSERACT_ROOT}/lib/debug/zlibd1.dll
+            ${TESSERACT_ROOT}/lib/debug/liblzma.dll
+            ${TESSERACT_ROOT}/lib/debug/lz4d.dll
+            ${TESSERACT_ROOT}/lib/debug/jpeg62.dll
+            ${TESSERACT_ROOT}/lib/debug/gif.dll
+            ${TESSERACT_ROOT}/lib/debug/openjp2.dll
+            ${TESSERACT_ROOT}/lib/debug/libpng16d.dll
+            ${TESSERACT_ROOT}/lib/debug/zstd.dll
+            ${TESSERACT_ROOT}/lib/debug/libwebp.dll
+            ${TESSERACT_ROOT}/lib/debug/libcrypto-3-x64.dll
+            ${TESSERACT_ROOT}/lib/debug/tiffd.dll
+            ${TESSERACT_ROOT}/lib/debug/libwebpmux.dll
+            ${TESSERACT_ROOT}/lib/debug/libsharpyuv.dll)
+    set(TESSERACT_LINK_LIBRARIES ${TESSERACT_ROOT}/lib/debug/tesseract53d.lib)
 else()
     set(V8_LINK_LIBRARIES ${V8_ROOT}/lib/release/v8.dll.lib
             ${V8_ROOT}/lib/release/v8_libbase.dll.lib
@@ -127,12 +127,32 @@ else()
             ${TORCH_ROOT}/lib/release/zlibwapi.dll ${TORCH_ROOT}/lib/release/torchtrt.dll ${TORCH_ROOT}/lib/release/nvinfer.dll
             ${TORCH_ROOT}/lib/release/nvinfer_builder_resource.dll)
     list(APPEND TORCH_LIBRARIES ${TORCH_ROOT}/lib/release/torchtrt.lib)
+    set(TESSERACT_RUNTIME_LIBRARIES ${TESSERACT_ROOT}/lib/release/tesseract53.dll
+            ${TESSERACT_ROOT}/lib/release/archive.dll
+            ${TESSERACT_ROOT}/lib/release/leptonica-1.83.1.dll
+            ${TESSERACT_ROOT}/lib/release/libcurl.dll
+            ${TESSERACT_ROOT}/lib/release/bz2.dll
+            ${TESSERACT_ROOT}/lib/release/zlib1.dll
+            ${TESSERACT_ROOT}/lib/release/liblzma.dll
+            ${TESSERACT_ROOT}/lib/release/lz4.dll
+            ${TESSERACT_ROOT}/lib/release/jpeg62.dll
+            ${TESSERACT_ROOT}/lib/release/gif.dll
+            ${TESSERACT_ROOT}/lib/release/openjp2.dll
+            ${TESSERACT_ROOT}/lib/release/libpng16.dll
+            ${TESSERACT_ROOT}/lib/release/zstd.dll
+            ${TESSERACT_ROOT}/lib/release/libwebp.dll
+            ${TESSERACT_ROOT}/lib/release/libcrypto-3-x64.dll
+            ${TESSERACT_ROOT}/lib/release/tiff.dll
+            ${TESSERACT_ROOT}/lib/release/libwebpmux.dll
+            ${TESSERACT_ROOT}/lib/release/libsharpyuv.dll)
+    set(TESSERACT_LINK_LIBRARIES ${TESSERACT_ROOT}/lib/release/tesseract53.lib)
 endif()
 
 add_executable(MathOCR main.cpp utils.cpp OCREngine.cpp)
+
 target_include_directories(MathOCR PUBLIC ${OpenCV_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS} ${V8_ROOT} ${V8_ROOT}/include ${WKHTMLTOX_ROOT}/include ${TESSERACT_ROOT}/include)
 target_compile_definitions(MathOCR PUBLIC V8_ENABLE_SANDBOX V8_COMPRESS_POINTERS _WIN32_WINNT=0x0601)
-target_link_libraries(MathOCR PUBLIC ${TORCH_LIBRARIES} ${Boost_LIBRARIES} ${OpenCV_LINK_LIBRARIES} ${V8_LINK_LIBRARIES} ${WKHTMLTOX_LIBRARIES} ${TESSERACT_ROOT}/lib/org.sw.demo.google.tesseract.libtesseract-5.3.1.lib)
+target_link_libraries(MathOCR PUBLIC ${TORCH_LIBRARIES} ${Boost_LIBRARIES} ${OpenCV_LINK_LIBRARIES} ${V8_LINK_LIBRARIES} ${WKHTMLTOX_LIBRARIES} ${TESSERACT_LINK_LIBRARIES})
 
 add_custom_command(TARGET MathOCR POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${OpenCV_RUNTIME_LIBRARIES}
@@ -144,4 +164,3 @@ add_custom_command(TARGET MathOCR POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if
         ${TESSERACT_ROOT}/tessdata/eng.traineddata
         ${CMAKE_SOURCE_DIR}/models/classify.torchscript
         $<TARGET_FILE_DIR:MathOCR>)
-

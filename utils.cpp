@@ -132,7 +132,7 @@ std::unordered_map<std::string, int> OCRUtils::getVocabMap(const std::filesystem
 
 torch::Tensor OCRUtils::toTensor(const std::string &str) {
   size_t len = str.size();
-  torch::Tensor tensor = torch::empty(static_cast<int64_t>(len + 1), torch::TensorOptions(torch::kInt8));
+  torch::Tensor tensor = torch::empty(static_cast<int64_t>(len + 1), torch::TensorOptions(torch::kInt8).device(torch::kCUDA));
   int i;
   for (i = 0; i < len; ++i)
     tensor[i] = str[i];
@@ -154,21 +154,18 @@ std::vector<std::string> OCRUtils::toString(const torch::Tensor &tensor) {
   return answer;
 }
 
-cv::cuda::GpuMat ImageUtils::toMat(const torch::Tensor &tensor, bool isNormalized, bool cvFormat) {
-  torch::Tensor imageTensor;
-  if (cvFormat)
-    imageTensor = tensor.permute({0, 2, 3, 1}).squeeze_(0);
-  else
-    imageTensor = tensor.unsqueeze_(3);
-  if (isNormalized)
-    imageTensor = imageTensor.mul_(255);
-  imageTensor = imageTensor.to(torch::kByte);
-  torch::IntArrayRef dimensions = imageTensor.sizes();
-  if (dimensions.size() != 3) {
-    std::cerr << "Invalid dimension" << std::endl;
-    exit(INVALID_PARAMETER);
+std::vector<cv::cuda::GpuMat> OCRUtils::toMat(const torch::Tensor &tensor, bool isNormalized) {
+  std::vector<cv::cuda::GpuMat> mats;
+  int64_t batchSize = tensor.size(0);
+  for(int64_t i = 0; i < batchSize; ++i) {
+    torch::Tensor imageTensor = tensor[i].permute({1, 2, 0});
+    if (isNormalized)
+      imageTensor = imageTensor.mul_(255);
+    imageTensor = imageTensor.to(torch::kByte);
+    torch::IntArrayRef dimensions = imageTensor.sizes();
+    mats.emplace_back(cv::Size((int) dimensions[1], (int) dimensions[0]), CV_8UC1, imageTensor.data_ptr<uchar>());
   }
-  return {cv::Size((int) dimensions[1], (int) dimensions[0]), CV_8UC1, imageTensor.data_ptr<uchar>(), static_cast<size_t>(tensor.stride(2))};
+  return mats;
 }
 
 torch::Tensor ImageUtils::toTensor(const cv::cuda::GpuMat &matrix, torch::ScalarType size, int channels) {
@@ -179,7 +176,7 @@ torch::Tensor ImageUtils::toTensor(const cv::cuda::GpuMat &matrix, torch::Scalar
   auto options = torch::TensorOptions().dtype(size).device(torch::kCUDA);
   return torch::from_blob(matrix.data, {1, static_cast<int64_t>(channels), static_cast<int64_t>(matrix.rows), static_cast<int64_t>(matrix.cols)},
                           {1, 1, (long long) (matrix.step / sizeof(size)), static_cast<int64_t>(channels)},
-                          torch::Deleter(), options);
+                          torch::Deleter(), options).contiguous();
 }
 
 void ImageUtils::addMargin(const cv::cuda::GpuMat &pixels, cv::Rect_<int> &rect, int margin) {
@@ -197,7 +194,7 @@ std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator> ImageUtils
   constexpr int maxNms = 30000;
   float scaleX = (float) pixels.cols / 640;
   float scaleY = (float) pixels.rows / 640;
-  cv::cuda::resize(pixels, resized, cv::Size(640, 640), scaleX, scaleY, cv::INTER_AREA);
+  cv::cuda::resize(pixels, resized, cv::Size(640, 640), scaleX, scaleY, cv::INTER_CUBIC);
   torch::NoGradGuard no_grad;
   torch::Tensor imgTensor = toTensor(resized, torch::kByte).contiguous().to(torch::kFloat).div(255).expand({1, 3, -1, -1});
   static Classifier imgClassification;
@@ -333,6 +330,10 @@ void ImageUtils::rotate(cv::cuda::GpuMat &pixels, float degree) {
   pixels = rotated;
 }
 
+void ImageUtils::equalize(cv::cuda::GpuMat &pixels) {
+  cv::cuda::equalizeHist(pixels, pixels);
+}
+
 void ImageUtils::denoise(cv::cuda::GpuMat &pixels) {
   static cv::Ptr<cv::cuda::Filter> denoiseFilter = cv::cuda::createMorphologyFilter(cv::MORPH_OPEN, CV_8UC1, cv::getStructuringElement(cv::MORPH_RECT, cv::Size(2, 1)));
   denoiseFilter->apply(pixels, pixels);
@@ -379,7 +380,7 @@ void GhostscriptHandler::run(const std::filesystem::path &inputFilePath) {
   fileName = inputFilePath.stem();
   outputPrefix /= fileName;
 
-  process = boost::process::child("ghostscript -sDEVICE=tifflzw -sOutputFile=" + outputPrefix.generic_string() + "_page%d.tiff -dTextAlphaBits=4 -dGraphicsAlphaBits=4 -dUseTrimBox -dBATCH -dNOPAUSE " + inputFilePath.generic_string(),
+  process = boost::process::child("ghostscript -sDEVICE=tifflzw -sOutputFile=" + outputPrefix.generic_string() + "_page%d.tiff -dTextAlphaBits=4 -dGraphicsAlphaBits=4 -dDITHER=300 -dUseTrimBox -dBATCH -dSAFER -dNOPAUSE " + inputFilePath.generic_string(),
                                   boost::process::std_in.close(), boost::process::std_out > asyncPipe, boost::process::std_err > stderr, ioContext);
   boost::asio::async_read_until(asyncPipe, buffer, '\n', boost::bind(&GhostscriptHandler::processOutput, this, boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred));
   ioContext.run();
@@ -421,7 +422,7 @@ void GhostscriptHandler::processOutput() {
       outputFilePath += std::to_string(pageNum);
       outputFilePath += ".png";
       std::get<std::function<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(cv::cuda::GpuMat &)>>(callback)(curImg);
-      cv::cuda::resize(curImg, curImg, cv::Size(640, 640), cv::INTER_AREA);
+      cv::cuda::resize(curImg, curImg, cv::Size(640, 640), cv::INTER_CUBIC);
       cv::Mat out(curImg);
       cv::imwrite(outputFilePath.generic_string(), out);
     }

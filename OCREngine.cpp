@@ -14,7 +14,7 @@
 #include <torch_tensorrt/logging.h>
 #include <torch_tensorrt/torch_tensorrt.h>
 
-LatexOCREngineImpl::DataSet::DataSet(std::filesystem::path inputPath, OCRMode mode) : mode(mode), formulasFile(inputPath / "im2latex_formulas.lst"), formulasFolder(inputPath / "formula_images") {
+LatexOCR::DataSet::DataSet(std::filesystem::path inputPath, OCRMode mode) : mode(mode), formulasFile(inputPath / "im2latex_formulas.lst"), formulasFolder(inputPath / "formula_images") {
   std::filesystem::path trainingFile(std::move(inputPath));
   switch (mode) {
     case OCRMode::TRAIN:
@@ -41,11 +41,11 @@ LatexOCREngineImpl::DataSet::DataSet(std::filesystem::path inputPath, OCRMode mo
     itemLocations.emplace_back(lineNum, formulasFolder / fileName += ".png");
 }
 
-void LatexOCREngineImpl::DataSet::resize(cv::cuda::GpuMat &pixels) {
+void LatexOCR::DataSet::resize(cv::cuda::GpuMat &pixels) {
   cv::cuda::resize(pixels, pixels, cv::Size(EncoderImpl::IMG_SIZE, EncoderImpl::IMG_SIZE), cv::INTER_CUBIC);
 }
 
-torch::data::Example<> LatexOCREngineImpl::DataSet::Collate::apply_batch(std::vector<torch::data::Example<>> data) {
+torch::data::Example<> LatexOCR::DataSet::Collate::apply_batch(std::vector<torch::data::Example<>> data) {
   std::vector<torch::Tensor> imgs, lbls;
   imgs.reserve(data.size());
   lbls.reserve(data.size());
@@ -61,7 +61,7 @@ torch::data::Example<> LatexOCREngineImpl::DataSet::Collate::apply_batch(std::ve
   return {torch::stack(imgs), torch::stack(lbls)};
 }
 
-torch::data::Example<> LatexOCREngineImpl::DataSet::get(size_t idx) {
+torch::data::Example<> LatexOCR::DataSet::get(size_t idx) {
   std::pair<int, std::filesystem::path> itemLocation = itemLocations[idx];
 
   std::ifstream texStream(formulasFile);
@@ -113,29 +113,29 @@ torch::Tensor Classifier::forward(const torch::Tensor &input) {
   return torch::cat({pT.slice(1, 0, 4), score, pT.slice(1, 4, -1)}, 1).permute({0, 2, 1});
 }
 
-EncoderImpl::FeedForwardImpl::FeedForwardImpl(int64_t dim, int64_t hiddenDim) {
+LatexOCR::EncoderImpl::FeedForwardImpl::FeedForwardImpl(int64_t dim, int64_t hiddenDim) {
   net = register_module("feedForwardNet", torch::nn::Sequential(torch::nn::LayerNorm(std::vector<int64_t>({dim})),
                                                                 torch::nn::Linear(dim, hiddenDim),
                                                                 torch::nn::GELU(),
                                                                 torch::nn::Linear(hiddenDim, dim)));
 }
 
-torch::Tensor EncoderImpl::FeedForwardImpl::forward(const torch::Tensor &input) {
+torch::Tensor LatexOCR::EncoderImpl::FeedForwardImpl::forward(const torch::Tensor &input) {
   return net->forward(input);
 }
 
-EncoderImpl::AttentionImpl::AttentionImpl(int64_t dim, int64_t heads = 8, int64_t dimHead = 64) : heads(heads),
+LatexOCR::EncoderImpl::AttentionImpl::AttentionImpl(int64_t dim, int64_t heads = 8, int64_t dimHead = 64) : heads(heads),
                                                                                                   scale((float) 1 / (float) (dimHead * dimHead)) {
   norm = register_module("norm", torch::nn::LayerNorm(std::vector<int64_t>({dim})));
   attend = register_module("attend", torch::nn::Softmax(-1));
   toQkv = register_module("toQkv", torch::nn::Linear(torch::nn::LinearOptions(dim, dimHead * heads * 3).bias(false)));
-  toOut = register_module("toOut", torch::nn::Linear(torch::nn::LinearOptions(dimHead * heads * 3, dim).bias(false)));
+  toOut = register_module("toOut", torch::nn::Linear(torch::nn::LinearOptions(dimHead * heads, dim).bias(false)));
 }
 
-torch::Tensor EncoderImpl::AttentionImpl::forward(torch::Tensor input) {
+torch::Tensor LatexOCR::EncoderImpl::AttentionImpl::forward(torch::Tensor input) {
   input = norm->forward(input);
 
-  std::vector<torch::Tensor> qkv = toQkv->forward(input).chunk(3, 1);
+  std::vector<torch::Tensor> qkv = toQkv->forward(input).chunk(3, -1);
   torch::Tensor q = qkv[0].unflatten(2, {heads, qkv[0].size(2) / heads}).permute({0, 2, 1, 3});
   torch::Tensor k = qkv[1].unflatten(2, {heads, qkv[1].size(2) / heads}).permute({0, 2, 1, 3});
   torch::Tensor v = qkv[2].unflatten(2, {heads, qkv[2].size(2) / heads}).permute({0, 2, 1, 3});
@@ -146,46 +146,42 @@ torch::Tensor EncoderImpl::AttentionImpl::forward(torch::Tensor input) {
   return toOut->forward(out);
 }
 
-EncoderImpl::TransformerImpl::TransformerImpl(int64_t dim, int64_t depth, int64_t heads, int64_t dimHeads, int64_t mlpDim) {
-  for (int64_t i = 0; i < depth; ++i)
-    layers->push_back(torch::nn::ModuleList(AttentionImpl(dim, heads, dimHeads),
-                                            FeedForwardImpl(dim, mlpDim)));
+LatexOCR::EncoderImpl::TransformerImpl::TransformerImpl(int64_t dim, int64_t depth, int64_t heads, int64_t dimHeads, int64_t mlpDim) {
+  for (int64_t i = 0; i < depth; ++i) {
+    layers->push_back(AttentionImpl(dim, heads, dimHeads));
+    layers->push_back(FeedForwardImpl(dim, mlpDim));
+  }
   layers = register_module("transformerLayers", layers);
 }
 
-torch::Tensor EncoderImpl::TransformerImpl::forward(torch::Tensor input) {
+torch::Tensor LatexOCR::EncoderImpl::TransformerImpl::forward(torch::Tensor input) {
   size_t len = layers->size();
-  for (size_t i = 0; i < len; ++i) {
-    torch::nn::ModuleList transformerItems = static_cast<torch::nn::ModuleList>(layers[i]);
-    input = transformerItems->at<AttentionImpl>(0).forward(input) + input;
-    input = transformerItems->at<FeedForwardImpl>(1).forward(input) + input;
+  for (size_t i = 0; i < len;) {
+    input = layers->ptr<AttentionImpl>(i++)->forward(input) + input;
+    input = layers->ptr<FeedForwardImpl>(i++)->forward(input) + input;
   }
   return input;
 }
 
-torch::Tensor EncoderImpl::positionalEncoding(const torch::Tensor &patches) {
-  int64_t height = patches.size(1);
-  int64_t width = patches.size(2);
-  int64_t dim = patches.size(3);
-
-  std::vector<torch::Tensor> xy = torch::meshgrid({torch::arange(height).to(torch::kCUDA),
-                                                   torch::arange(width).to(torch::kCUDA)},
+torch::Tensor LatexOCR::EncoderImpl::positionalEncoding(int h, int w, int dim) {
+  std::vector<torch::Tensor> xy = torch::meshgrid({torch::arange(h).to(device),
+                                                   torch::arange(w).to(device)},
                                                   "ij");
-  torch::Tensor x = xy[0];
-  torch::Tensor y = xy[1];
+  torch::Tensor x = xy[1];
+  torch::Tensor y = xy[0];
 
-  torch::Tensor omega = torch::arange(dim / 4).to(torch::kCUDA) / ((dim / 4) - 1);
+  torch::Tensor omega = torch::arange(dim / 4).to(device) / ((dim / 4) - 1);
   omega = 1.0 / (torch::pow(TEMPERATURE, omega));
 
-  y = y.flatten().index({torch::indexing::Slice(), torch::indexing::Slice(torch::indexing::None)}) *
-      omega.index({torch::indexing::Slice(torch::indexing::None), torch::indexing::Slice()});
-  x = x.flatten().index({torch::indexing::Slice(), torch::indexing::Slice(torch::indexing::None)}) *
-      omega.index({torch::indexing::Slice(torch::indexing::None), torch::indexing::Slice()});
+  y = y.flatten().index({torch::indexing::Slice(), torch::indexing::None}) *
+      omega.index({torch::indexing::None, torch::indexing::Slice()});
+  x = x.flatten().index({torch::indexing::Slice(), torch::indexing::None}) *
+      omega.index({torch::indexing::None, torch::indexing::Slice()});
 
   return torch::cat({x.sin(), x.cos(), y.sin(), y.cos()}, 1);
 }
 
-EncoderImpl::EncoderImpl(int64_t numClasses) {
+LatexOCR::EncoderImpl::EncoderImpl(int64_t numClasses) {
   toPatchEmbedding->push_back(torch::nn::LayerNorm(torch::nn::LayerNormOptions({256})));
   toPatchEmbedding->push_back(torch::nn::Linear(256, 512));
   toPatchEmbedding->push_back(torch::nn::LayerNorm(torch::nn::LayerNormOptions({512})));
@@ -194,20 +190,17 @@ EncoderImpl::EncoderImpl(int64_t numClasses) {
   toLatent = register_module("toLatent", torch::nn::Identity());
   linearHead = register_module("linearHead", torch::nn::Sequential(torch::nn::LayerNorm(std::vector<int64_t>({512})),
                                                                    torch::nn::Linear(512, numClasses)));
+  pe = register_buffer("pe", positionalEncoding());
 }
 
-torch::Tensor EncoderImpl::forward(torch::Tensor input) {
+torch::Tensor LatexOCR::EncoderImpl::forward(torch::Tensor input) {
   int64_t h = input.size(2);
   int64_t w = input.size(3);
 
-  input = input.permute({0, 2, 3, 1}).unflatten(1, {h / PATCH_SIZE, PATCH_SIZE}).unflatten(3, {w / PATCH_SIZE, PATCH_SIZE}).permute({0, 1, 3, 2, 4, 5}).flatten(3);
-
-  std::cout << input.sizes() << std::endl;
+  input = input.permute({0, 2, 3, 1}).unflatten(1, {h / PATCH_SIZE, PATCH_SIZE}).unflatten(3, {w / PATCH_SIZE, PATCH_SIZE}).permute({0, 1, 3, 2, 4, 5}).flatten(3).flatten(1, 2).to(torch::kFloat);
 
   torch::Tensor x = toPatchEmbedding->forward(input);
-  torch::Tensor pe = positionalEncoding(x);
-  x = x.flatten(1, (int64_t)x.sizes().size() - 1) + pe;
-
+  x += pe;
   x = transformer->forward(x);
   x = x.mean(1);
 
@@ -217,24 +210,27 @@ torch::Tensor EncoderImpl::forward(torch::Tensor input) {
   return x;
 }
 
-DecoderImpl::DecoderImpl() {
+LatexOCR::DecoderImpl::DecoderImpl() {
+
 }
 
-torch::Tensor DecoderImpl::forward(torch::Tensor input) {
+torch::Tensor LatexOCR::DecoderImpl::forward(torch::Tensor input) {
   return torch::Tensor();
 }
 
-LatexOCREngineImpl::LatexOCREngineImpl() : vocabMap() {
+LatexOCR::LatexOCREngineImpl::LatexOCREngineImpl() : vocabMap(), device(getDevice()) {
   encoder = register_module("OCREncoder", Encoder(400));
   decoder = register_module("OCRDecoder", Decoder());
+  this->to(device);
 }
 
-LatexOCREngineImpl::LatexOCREngineImpl(const std::string &modelPath) {
+LatexOCR::LatexOCREngineImpl::LatexOCREngineImpl(const std::string &modelPath) {
   std::shared_ptr<LatexOCREngineImpl> ptr(this);
   torch::load(ptr, modelPath);
+  to(device);
 }
 
-void LatexOCREngineImpl::train(DataSet dataset, int batchSize, size_t epoch, float learningRate) {
+void LatexOCR::LatexOCREngineImpl::train(DataSet dataset, int batchSize, size_t epoch, float learningRate) {
   decoder->train();
   encoder->train();
 
@@ -244,14 +240,14 @@ void LatexOCREngineImpl::train(DataSet dataset, int batchSize, size_t epoch, flo
   auto start = std::chrono::high_resolution_clock::now();
   torch::optim::Adam optimizer(this->parameters(), learningRate);
   torch::nn::CTCLoss criterion;
-  criterion->to(torch::kCUDA);
+  criterion->to(device);
   for (size_t i = 1; i <= epoch; ++i) {
     for (auto &batch: *dataLoader) {
       torch::Tensor data = batch.data;
       optimizer.zero_grad();
       torch::Tensor prediction = forward(data);
       torch::Tensor logProbs = torch::nn::functional::log_softmax(prediction, torch::nn::functional::LogSoftmaxFuncOptions(2));
-      torch::Tensor inputLengths = torch::full({prediction.size(0)}, prediction.size(0), torch::TensorOptions(torch::kLong)).to(torch::kCUDA);
+      torch::Tensor inputLengths = torch::full({prediction.size(0)}, prediction.size(0), torch::TensorOptions(torch::kLong)).to(device);
       torch::Tensor loss = criterion->forward(logProbs, batch.target, inputLengths, torch::tensor(batch.target.size(0)));
       loss.backward();
       optimizer.step();
@@ -260,7 +256,7 @@ void LatexOCREngineImpl::train(DataSet dataset, int batchSize, size_t epoch, flo
   }
 }
 
-void LatexOCREngineImpl::test(const std::filesystem::path &dataDirectory) {
+void LatexOCR::LatexOCREngineImpl::test(const std::filesystem::path &dataDirectory) {
   decoder->eval();
   encoder->eval();
 
@@ -290,12 +286,12 @@ void LatexOCREngineImpl::test(const std::filesystem::path &dataDirectory) {
   std::cout << counter << "/" << total << " characters correct" << std::endl;
 }
 
-void LatexOCREngineImpl::exportWeights(const std::filesystem::path &outputPath) {
+void LatexOCR::LatexOCREngineImpl::exportWeights(const std::filesystem::path &outputPath) {
   std::shared_ptr<LatexOCREngineImpl> ptr(this);
   torch::save(ptr, (outputPath / "weights.pt").generic_string());
 }
 
-torch::Tensor LatexOCREngineImpl::forward(torch::Tensor input) {
+torch::Tensor LatexOCR::LatexOCREngineImpl::forward(torch::Tensor input) {
   input = encoder->forward(input);
   input = decoder->forward(input);
   return input;
@@ -322,10 +318,10 @@ std::string TesseractOCREngine::doOCR(const cv::cuda::GpuMat &pixels) {
 }
 
 std::string OCREngine::toLatex(const cv::cuda::GpuMat &pixels) {
+  static LatexOCR::LatexOCREngine latexOCR("weights.pt");
   cv::cuda::GpuMat pixelsCopy = pixels;
-  LatexOCREngineImpl::DataSet::resize(pixelsCopy);
+  LatexOCR::DataSet::resize(pixelsCopy);
   torch::Tensor imageTensor = ImageUtils::toTensor(pixelsCopy, torch::kByte).transpose(1, 3).to(torch::kFloat32).sub(128).div(128);
-  static LatexOCREngine latexOCR("weights.pt");
   torch::Tensor prediction = latexOCR->forward(imageTensor);
   return OCRUtils::toString(prediction)[0];
 }

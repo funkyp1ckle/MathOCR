@@ -8,6 +8,7 @@ const int INVALID_PARAMETER = 2;
 const int ALLOC_ERROR = 3;
 const int READ_ERROR = 4;
 const int PROCESSING_ERROR = 5;
+const int ENVIRONMENT_ERROR = 6;
 
 const std::string VERSION = "0.1";
 
@@ -53,6 +54,12 @@ void imgToLatex(cv::cuda::GpuMat &pixels, const std::filesystem::path &outputPre
 }
 
 int main(int argc, char **argv) {
+  if(!cv::cuda::getCudaEnabledDeviceCount()) {
+    std::cerr << "Program requires CUDA enabled device" << std::endl;
+    std::cerr << cv::getBuildInformation() << std::endl;
+    exit(ENVIRONMENT_ERROR);
+  }
+
   if (argc == 1) {
     std::cerr << "did not supply parameters, use /help for usage" << std::endl;
     exit(INVALID_PARAMETER_COUNT);
@@ -73,12 +80,11 @@ int main(int argc, char **argv) {
     std::cout << "MathOCR version: " << VERSION << std::endl;
   } else if (argOne == "train") {
     std::filesystem::path dataDirectory(argv[2]);
-    LatexOCREngine latexOCR;
-    latexOCR->to(torch::kCUDA);
+    LatexOCR::LatexOCREngine latexOCR;
     int batchSize = std::stoi(argv[3]);
     unsigned long epoch = std::stoul(argv[4]);
     float learningRate = std::stof(argv[5]);
-    LatexOCREngineImpl::DataSet dataset(dataDirectory, LatexOCREngineImpl::DataSet::OCRMode::TRAIN);
+    LatexOCR::DataSet dataset(dataDirectory, LatexOCR::DataSet::OCRMode::TRAIN);
     latexOCR->train(dataset, batchSize, epoch, learningRate);
     latexOCR->exportWeights("../models/ocr.pt");
   } else if (argOne == "preprocess") {

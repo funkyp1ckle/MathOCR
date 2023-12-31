@@ -113,18 +113,18 @@ torch::Tensor Classifier::forward(const torch::Tensor &input) {
   return torch::cat({pT.slice(1, 0, 4), score, pT.slice(1, 4, -1)}, 1).permute({0, 2, 1});
 }
 
-LatexOCR::EncoderImpl::FeedForwardImpl::FeedForwardImpl(int64_t dim, int64_t hiddenDim) {
+LatexOCR::FeedForwardImpl::FeedForwardImpl(int64_t dim, int64_t hiddenDim) {
   net = register_module("feedForwardNet", torch::nn::Sequential(torch::nn::LayerNorm(std::vector<int64_t>({dim})),
                                                                 torch::nn::Linear(dim, hiddenDim),
                                                                 torch::nn::GELU(),
                                                                 torch::nn::Linear(hiddenDim, dim)));
 }
 
-torch::Tensor LatexOCR::EncoderImpl::FeedForwardImpl::forward(const torch::Tensor &input) {
+torch::Tensor LatexOCR::FeedForwardImpl::forward(const torch::Tensor &input) {
   return net->forward(input);
 }
 
-LatexOCR::EncoderImpl::AttentionImpl::AttentionImpl(int64_t dim, int64_t heads = 8, int64_t dimHead = 64) : heads(heads),
+LatexOCR::AttentionImpl::AttentionImpl(int64_t dim, int64_t heads = 8, int64_t dimHead = 64) : heads(heads),
                                                                                                   scale((float) 1 / (float) (dimHead * dimHead)) {
   norm = register_module("norm", torch::nn::LayerNorm(std::vector<int64_t>({dim})));
   attend = register_module("attend", torch::nn::Softmax(-1));
@@ -132,7 +132,7 @@ LatexOCR::EncoderImpl::AttentionImpl::AttentionImpl(int64_t dim, int64_t heads =
   toOut = register_module("toOut", torch::nn::Linear(torch::nn::LinearOptions(dimHead * heads, dim).bias(false)));
 }
 
-torch::Tensor LatexOCR::EncoderImpl::AttentionImpl::forward(torch::Tensor input) {
+torch::Tensor LatexOCR::AttentionImpl::forward(torch::Tensor input) {
   input = norm->forward(input);
 
   std::vector<torch::Tensor> qkv = toQkv->forward(input).chunk(3, -1);
@@ -146,7 +146,7 @@ torch::Tensor LatexOCR::EncoderImpl::AttentionImpl::forward(torch::Tensor input)
   return toOut->forward(out);
 }
 
-LatexOCR::EncoderImpl::TransformerImpl::TransformerImpl(int64_t dim, int64_t depth, int64_t heads, int64_t dimHeads, int64_t mlpDim) {
+LatexOCR::TransformerImpl::TransformerImpl(int64_t dim, int64_t depth, int64_t heads, int64_t dimHeads, int64_t mlpDim) {
   for (int64_t i = 0; i < depth; ++i) {
     layers->push_back(AttentionImpl(dim, heads, dimHeads));
     layers->push_back(FeedForwardImpl(dim, mlpDim));
@@ -154,7 +154,7 @@ LatexOCR::EncoderImpl::TransformerImpl::TransformerImpl(int64_t dim, int64_t dep
   layers = register_module("transformerLayers", layers);
 }
 
-torch::Tensor LatexOCR::EncoderImpl::TransformerImpl::forward(torch::Tensor input) {
+torch::Tensor LatexOCR::TransformerImpl::forward(torch::Tensor input) {
   size_t len = layers->size();
   for (size_t i = 0; i < len;) {
     input = layers->ptr<AttentionImpl>(i++)->forward(input) + input;
@@ -210,24 +210,24 @@ torch::Tensor LatexOCR::EncoderImpl::forward(torch::Tensor input) {
   return x;
 }
 
-LatexOCR::DecoderImpl::DecoderImpl() {
-
+LatexOCR::DecoderImpl::DecoderImpl(const std::unordered_map<std::string, int>& vocab) : vocab(vocab) {
+  transformer = register_module("decodingTransformer", Transformer(512, 6, 16, 64, 2048)); // TODO: fix params
 }
 
 torch::Tensor LatexOCR::DecoderImpl::forward(torch::Tensor input) {
   return torch::Tensor();
 }
 
-LatexOCR::LatexOCREngineImpl::LatexOCREngineImpl() : vocabMap(), device(getDevice()) {
+LatexOCR::LatexOCREngineImpl::LatexOCREngineImpl() {
   encoder = register_module("OCREncoder", Encoder(400));
-  decoder = register_module("OCRDecoder", Decoder());
+  decoder = register_module("OCRDecoder", Decoder(OCRUtils::getVocab("../dataset")));
   this->to(device);
 }
 
 LatexOCR::LatexOCREngineImpl::LatexOCREngineImpl(const std::string &modelPath) {
   std::shared_ptr<LatexOCREngineImpl> ptr(this);
   torch::load(ptr, modelPath);
-  to(device);
+  this->to(device);
 }
 
 void LatexOCR::LatexOCREngineImpl::train(DataSet dataset, int batchSize, size_t epoch, float learningRate) {

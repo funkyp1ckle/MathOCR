@@ -3,9 +3,11 @@
 /cmake-build-debug/
 /cmake-build-release/
 /ghostscript/
-/katex/
-/v8/
 /wkhtmltox/
 /.clang-format
 /models/
 /tesseract/
+/nodejs/
+/node_modules/
+/package.json
+/package-lock.json

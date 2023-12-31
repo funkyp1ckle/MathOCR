@@ -5,6 +5,9 @@
 #include "utils.h"
 
 #include <boost/process.hpp>
+#include <boost/regex.hpp>
+
+#include <uv.h>
 
 #include <opencv2/cudaarithm.hpp>
 #include <opencv2/cudawarping.hpp>
@@ -13,126 +16,512 @@
 
 #include <utility>
 
-KatexHandler::KatexHandler() : platform(v8::platform::NewDefaultPlatform()) {
-  v8::V8::InitializeICU();
+KatexHandler::KatexHandler() {
+  char *nodeArgsA[] = {(char *) "node"};
+  char **nodeArgsP = nodeArgsA;
+  nodeArgsP = uv_setup_args(1, nodeArgsP);
+  std::vector<std::string> nodeArgs(nodeArgsP, nodeArgsP + 1);
+
+  std::unique_ptr<node::InitializationResult> result = node::InitializeOncePerProcess(nodeArgs, {
+    node::ProcessInitializationFlags::kNoInitializeV8,
+    node::ProcessInitializationFlags::kNoInitializeNodeV8Platform
+  });
+
+  std::string errorCodes;
+  for (const std::string &error: result->errors())
+    std::cerr << "NodeJS Init Error: " << error << std::endl;
+
+  if (!result->errors().empty() || result->early_return() != 0)
+    exit(INVALID_PARAMETER);
+
+  platform = node::MultiIsolatePlatform::Create(4);
   v8::V8::InitializePlatform(platform.get());
   v8::V8::Initialize();
 
-  parameters.array_buffer_allocator = v8::ArrayBuffer::Allocator::NewDefaultAllocator();
-  _isolate = v8::Isolate::New(parameters);
+  std::vector<std::string> errors;
+  std::vector<std::string> execArgs;
 
-  v8::Isolate::Scope isolate_scope(_isolate);
-  v8::HandleScope handle_scope(_isolate);
+  setup = node::CommonEnvironmentSetup::Create(platform.get(), &errors, nodeArgs, execArgs);
+  if (!setup) {
+    for (const std::string &error: errors)
+      std::cerr << "NodeJS Environment Error: " << error << std::endl;
+    exit(INVALID_PARAMETER);
+  }
+  v8::Isolate *setupIsolate = setup->isolate();
+  node::Environment *env = setup->env();
 
-  auto context = v8::Context::New(_isolate);
-  v8::Context::Scope context_scope(context);
+  v8::Locker locker(setupIsolate);
+  v8::Isolate::Scope isolateScope(setupIsolate);
+  v8::HandleScope handleScope(setupIsolate);
+  v8::Context::Scope contextScope(setup->context());
 
-  std::ifstream file("../katex/katex.min.js");
-  std::stringstream stream;
-  stream << file.rdbuf();
-  std::string source = stream.str();
+  v8::MaybeLocal<v8::Value> scriptReturn = node::LoadEnvironment(env, [&](
+    const node::StartExecutionCallbackInfo &info) -> v8::MaybeLocal<v8::Value> {
+    auto loadKatex = "const publicRequire = require('module').createRequire(process.cwd() + '/');"
+                     "globalThis.require = publicRequire;"
+                     "const katex = require('katex');"
+                     "var global_str = '';"
+                     "var norm_str = '';"
+                     "var groupTypes = {};"
+                     "const delimiterSizes = {"
+                     "    \"mopen1\" : \"\\\\bigl\","
+                     "    \"mopen2\" : \"\\\\Bigl\","
+                     "    \"mopen3\" : \"\\\\biggl\","
+                     "    \"mopen4\" : \"\\\\Biggl\","
+                     "    \"mclose1\": \"\\\\bigr\","
+                     "    \"mclose2\": \"\\\\Bigr\","
+                     "    \"mclose3\": \"\\\\biggr\","
+                     "    \"mclose4\": \"\\\\Biggr\","
+                     "    \"mrel1\"  : \"\\\\bigm\","
+                     "    \"mrel2\"  : \"\\\\Bigm\","
+                     "    \"mrel3\"  : \"\\\\biggm\","
+                     "    \"mrel4\"  : \"\\\\Biggm\","
+                     "    \"mord1\"  : \"\\\\big\","
+                     "    \"mord2\"  : \"\\\\Big\","
+                     "    \"mord3\"  : \"\\\\bigg\","
+                     "    \"mord4\"  : \"\\\\Bigg\""
+                     "};"
+                     "groupTypes.hbox = function (group, options) {"
+                     "    norm_str = norm_str + \" \\\\mathrm{ \";"
+                     "    buildExpression(group.body, options);"
+                     "    norm_str = norm_str + \"} \";"
+                     "};"
+                     "groupTypes.cr = function (group, options) {"
+                     "    norm_str = norm_str + \" \\\\\\\\\";"
+                     "};"
+                     "groupTypes.atom = function (group, options) {"
+                     "    groupTypes[group.family](group, options);"
+                     "};"
+                     "groupTypes.kern = function (group, options) {"
+                     "    switch (group.dimension.number) {"
+                     "        case -3:"
+                     "            norm_str = norm_str + \"\\\\! \";"
+                     "            break;"
+                     "        case 1:"
+                     "            norm_str = group.dimension.unit === \"em\" ? norm_str + \"\\\\quad \" : norm_str + \"\\\\ \";"
+                     "            break;"
+                     "        case 2:"
+                     "            norm_str = group.dimension.unit === \"em\" ? norm_str + \"\\\\qquad \" : norm_str + \"\\\\;\\\\! \";"
+                     "            break;"
+                     "        case 3:"
+                     "            norm_str = norm_str + \"\\\\, \";"
+                     "            break;"
+                     "        case 4:"
+                     "            norm_str = norm_str + \"\\\\: \";"
+                     "            break;"
+                     "        case 5:"
+                     "            norm_str = norm_str + \"\\\\; \";"
+                     "            break;"
+                     "        case 18:"
+                     "            norm_str = norm_str + \"\\\\quad \";"
+                     "            break;"
+                     "        case 36:"
+                     "            norm_str = norm_str + \"\\\\qquad \";"
+                     "            break;"
+                     "        default:"
+                     "            throw new katex.ParseError(\"Got unknown kern size: '\" + group.dimension.number + \"'\");"
+                     "    }"
+                     "};"
+                     "groupTypes.internal = function (group, options) {"
+                     "};"
+                     "groupTypes.mathord = function (group, options) {"
+                     "    norm_str = norm_str + group.text + \" \";"
+                     "};"
+                     "groupTypes.textord = function (group, options) {"
+                     "    norm_str = norm_str + group.text + \" \";"
+                     "};"
+                     "groupTypes.bin = function (group) {"
+                     "    norm_str = norm_str + group.text + \" \";"
+                     "};"
+                     "groupTypes.rel = function (group) {"
+                     "    norm_str = norm_str + group.text + \" \";"
+                     "};"
+                     "groupTypes.open = function (group) {"
+                     "    norm_str = norm_str + group.text + \" \";"
+                     "};"
+                     "groupTypes.close = function (group) {"
+                     "    norm_str = norm_str + group.text + \" \";"
+                     "};"
+                     "groupTypes.inner = function (group) {"
+                     "    norm_str = norm_str + group.text + \" \";"
+                     "};"
+                     "groupTypes.punct = function (group) {"
+                     "    norm_str = norm_str + group.text + \" \";"
+                     "};"
+                     "groupTypes.ordgroup = function (group, options) {"
+                     "    norm_str = norm_str + \"{ \";"
+                     "    buildExpression(group.body, options);"
+                     "    norm_str = norm_str + \"} \";"
+                     "};"
+                     "groupTypes.text = function (group, options) {"
+                     "    norm_str = norm_str + \"\\\\mathrm { \";"
+                     "    buildExpression(group.body, options);"
+                     "    norm_str = norm_str + \"} \";"
+                     "};"
+                     "groupTypes.color = function (group, options) {"
+                     "    var inner = buildExpression(group.body[0], options);"
+                     "    var node = new mathMLTree.MathNode(\"mstyle\", inner);"
+                     "    node.setAttribute(\"mathcolor\", group.color);"
+                     "    return node;"
+                     "};"
+                     "groupTypes.supsub = function (group, options) {"
+                     "    buildGroup(group.base, options);"
+                     "    if (group.sub) {"
+                     "        norm_str = norm_str + \"_ \";"
+                     "        if (group.sub.type !== 'ordgroup') {"
+                     "            norm_str = norm_str + \"{ \";"
+                     "            buildGroup(group.sub, options);"
+                     "            norm_str = norm_str + \"} \";"
+                     "        } else {"
+                     "            buildGroup(group.sub, options);"
+                     "        }"
+                     "    }"
+                     "    if (group.sup) {"
+                     "        norm_str = norm_str + \"^ \";"
+                     "        if (group.sup.type !== 'ordgroup') {"
+                     "            norm_str = norm_str + \"{ \";"
+                     "            buildGroup(group.sup, options);"
+                     "            norm_str = norm_str + \"} \";"
+                     "        } else {"
+                     "            buildGroup(group.sup, options);"
+                     "        }"
+                     "    }"
+                     "};"
+                     "groupTypes.genfrac = function (group, options) {"
+                     "    if (!group.hasBarLine) {"
+                     "        norm_str = norm_str + \"\\\\binom \";"
+                     "    } else {"
+                     "        norm_str = norm_str + \"\\\\frac \";"
+                     "    }"
+                     "    buildGroup(group.numer, options);"
+                     "    buildGroup(group.denom, options);"
+                     "};"
+                     "groupTypes.array = function (group, options) {"
+                     "    norm_str = norm_str + \"\\\\begin{array} { \";"
+                     "    if (group.cols) {"
+                     "        group.cols.map(function (start) {"
+                     "            if (start && start.align) {"
+                     "                norm_str = norm_str + start.align + \" \";"
+                     "            }"
+                     "        });"
+                     "    } else {"
+                     "        group.body[0].map(function (start) {"
+                     "            norm_str = norm_str + \"l \";"
+                     "        });"
+                     "    }"
+                     "    norm_str = norm_str + \"} \";"
+                     "    group.body.map(function (row) {"
+                     "        if (row.length > 0) {"
+                     "            out = row.map(function (cell) {"
+                     "                buildGroup(cell, options);"
+                     "                norm_str = norm_str + \"& \";"
+                     "            });"
+                     "            norm_str = norm_str.substring(0, norm_str.length - 2) + \"\\\\\\\\ \";"
+                     "        }"
+                     "    });"
+                     "    norm_str = norm_str + \"\\\\end{array} \";"
+                     "};"
+                     "groupTypes.sqrt = function (group, options) {"
+                     "    if (group.index) {"
+                     "        norm_str = norm_str + \"\\\\sqrt [ \";"
+                     "        buildExpression(group.index.value, options);"
+                     "        norm_str = norm_str + \"] \";"
+                     "        buildGroup(group.body, options);"
+                     "    } else {"
+                     "        norm_str = norm_str + \"\\\\sqrt \";"
+                     "        buildGroup(group.body, options);"
+                     "    }"
+                     "};"
+                     "groupTypes.leftright = function (group, options) {"
+                     "    norm_str = norm_str + \"\\\\left\" + group.left + \" \";"
+                     "    buildExpression(group.body, options);"
+                     "    norm_str = norm_str + \"\\\\right\" + group.right + \" \";"
+                     "};"
+                     "groupTypes.accent = function (group, options) {"
+                     "    if (group.base.type !== 'ordgroup') {"
+                     "        norm_str = norm_str + group.label + \" { \";"
+                     "        buildGroup(group.base, options);"
+                     "        norm_str = norm_str + \"} \";"
+                     "    } else {"
+                     "        norm_str = norm_str + group.label + \" \";"
+                     "        buildGroup(group.base, options);"
+                     "    }"
+                     "};"
+                     "groupTypes.spacing = function (group) {"
+                     "    if (group.text === \" \") {"
+                     "        norm_str = norm_str + \"~ \";"
+                     "    } else {"
+                     "        norm_str = norm_str + group.text + \" \";"
+                     "    }"
+                     "};"
+                     "groupTypes.op = function (group) {"
+                     "    if (group.symbol) {"
+                     "        norm_str = norm_str + group.name + \" \";"
+                     "    } else {"
+                     "        if (group.limits === false) {"
+                     "            norm_str = norm_str + \"\\\\\\operatorname { \";"
+                     "        } else {"
+                     "            norm_str = norm_str + \"\\\\\\operatorname* { \";"
+                     "        }"
+                     "        for (let i = 1; i < group.name.length; ++i) {"
+                     "            norm_str = norm_str + group.name[i] + \" \";"
+                     "        }"
+                     "        norm_str = norm_str + \"} \";"
+                     "    }"
+                     "};"
+                     "groupTypes.katex = function (group) {"
+                     "    return new mathMLTree.MathNode("
+                     "        \"mtext\", [new mathMLTree.TextNode(\"KaTeX\")]);"
+                     "};"
+                     "groupTypes.font = function (group, options) {"
+                     "    var font = group.font;"
+                     "    if (font === \"mbox\" || font === \"hbox\") {"
+                     "        font = \"mathrm\";"
+                     "    }"
+                     "    norm_str = norm_str + \"\\\\\" + font + \" \";"
+                     "    let newOptions = options;"
+                     "    newOptions[\"font\"] = font;"
+                     "    buildGroup(group.body, newOptions);"
+                     "};"
+                     "groupTypes.delimsizing = function (group) {"
+                     "    if(group.delim !== \".\")"
+                     "        norm_str = norm_str + delimiterSizes[group.mclass + group.size] + \" \" + group.delim + \" \";"
+                     "};"
+                     "groupTypes.styling = function (group, options) {"
+                     "    norm_str = norm_str + \"\\\\\" + group.style + \"style \";"
+                     "    buildExpression(group.body, options);"
+                     "};"
+                     "groupTypes.sizing = function (group, options) {"
+                     "    if (group.value.original === \"\\\\rm\") {"
+                     "        norm_str = norm_str + \"\\\\mathrm { \";"
+                     "        let newOptions = options;"
+                     "        newOptions[\"font\"] = \"mathrm\";"
+                     "        buildExpression(group.body.type, newOptions);"
+                     "        norm_str = norm_str + \"} \";"
+                     "    } else {"
+                     "        norm_str = norm_str + \" \" + group.value.original + \" \";"
+                     "        buildExpression(group.body.type, options);"
+                     "    }"
+                     "};"
+                     "groupTypes.overline = function (group, options) {"
+                     "    norm_str = norm_str + \"\\\\overline { \";"
+                     "    buildGroup(group.body, options);"
+                     "    norm_str = norm_str + \"} \";"
+                     "};"
+                     "groupTypes.underline = function (group, options) {"
+                     "    norm_str = norm_str + \"\\\\underline { \";"
+                     "    buildGroup(group.body, options);"
+                     "    norm_str = norm_str + \"} \";"
+                     "};"
+                     "groupTypes.rule = function (group) {"
+                     "    norm_str = norm_str + \"\\\\rule { \" + group.value.width.number + \" \" + group.value.width.unit + \"  } { \" + group.value.height.number + \" \" + group.value.height.unit + \" } \";"
+                     "};"
+                     "groupTypes.llap = function (group, options) {"
+                     "    norm_str = norm_str + \"\\\\llap \";"
+                     "    buildGroup(group.value.body, options);"
+                     "};"
+                     "groupTypes.rlap = function (group, options) {"
+                     "    norm_str = norm_str + \"\\\\rlap \";"
+                     "    buildGroup(group.value.body, options);"
+                     "};"
+                     "groupTypes.phantom = function (group, options, prev) {"
+                     "    norm_str = norm_str + \"\\\\phantom { \";"
+                     "    buildExpression(group.value.value, options);"
+                     "    norm_str = norm_str + \"} \";"
+                     "};"
+                     "var buildExpression = function (expression, options) {"
+                     "    for (let i = 0; i < expression.length; i++) {"
+                     "        var group = expression[i];"
+                     "        buildGroup(group, options);"
+                     "    }"
+                     "};"
+                     "var buildGroup = function (group, options) {"
+                     "    if (groupTypes[group.type]) {"
+                     "        groupTypes[group.type](group, options);"
+                     "    } else {"
+                     "        throw new katex.ParseError(\"Got group of unknown type: '\" + group.type + \"'\");"
+                     "    }"
+                     "};"
+                     ""
+                     "function normalize(text) {"
+                     "    try {"
+                     "        global_str = '';"
+                     "        norm_str = '';"
+                     "        var tree = katex.__parse(text, {"
+                     "            macros: {"
+                     "                \"\\\\sp\": \"^\","
+                     "                \"\\\\mbox\": \"\\\\mathrm\""
+                     "            }"
+                     "        });"
+                     "        buildExpression(tree, {});"
+                     "        for (let i = 0; i < 300; ++i) {"
+                     "            norm_str = norm_str.replace('SSSSSS', '$');"
+                     "            norm_str = norm_str.replace(' S S S S S S', '$');"
+                     "        }"
+                     "        return norm_str.replace(/\\\\label { .*? }/, \"\");"
+                     "    } catch (e) {"
+                     "        return e;"
+                     "    }"
+                     "}";
+    v8::HandleScope scope(setupIsolate);
+    v8::Local<v8::Context> setupContext = setupIsolate->GetCurrentContext();
+    v8::Local<v8::Object> globalObject = setupContext->Global();
 
-  _run(source, context);
+    v8::Local<v8::String> requireStr = v8::String::NewFromUtf8(setupIsolate, "require").ToLocalChecked();
+    globalObject->Set(setupContext, requireStr, info.native_require).ToChecked();
+    v8::Local<v8::String> processStr = v8::String::NewFromUtf8(setupIsolate, "process").ToLocalChecked();
+    globalObject->Set(setupContext, processStr, info.process_object).ToChecked();
+    v8::Local<v8::String> source = v8::String::NewFromUtf8(setupIsolate, loadKatex,
+                                                           v8::NewStringType::kNormal).ToLocalChecked();
+    v8::Local<v8::Script> depScript = v8::Script::Compile(setupContext, source).ToLocalChecked();
+    v8::Local<v8::Value> result = depScript->Run(setupContext).ToLocalChecked();
+    return v8::Null(setupIsolate);
+  });
 
-  _persistent_context = v8::UniquePersistent<v8::Context>(_isolate, context);
+  if (scriptReturn.IsEmpty()) {
+    std::cerr << "Loading Katex has unhandled exception" << std::endl;
+    exit(PROCESSING_ERROR);
+  }
+
+  int exit_code = node::SpinEventLoop(env).FromMaybe(1);
+
+  context = v8::Global<v8::Context>(setupIsolate, setup->context());
+  isolate = setupIsolate;
 }
 
 KatexHandler::~KatexHandler() {
-  _persistent_context.Reset();
-  _isolate->Dispose();
-  v8::V8::Dispose();
-  v8::V8::DisposePlatform();
-  delete parameters.array_buffer_allocator;
+  node::TearDownOncePerProcess();
 }
 
-v8::Local<v8::Value> KatexHandler::_run(const std::string &source,
-                                        const v8::Local<v8::Context> &context) const {
-  v8::EscapableHandleScope handle_scope(_isolate);
-  v8::Local<v8::String> checked = v8::String::NewFromUtf8(_isolate, source.c_str()).ToLocalChecked();
-  v8::Local<v8::Script> script = v8::Script::Compile(context, checked).ToLocalChecked();
-  v8::TryCatch try_catch(_isolate);
-  auto result = script->Run(context);
+v8::Local<v8::Value> KatexHandler::run(const std::string &source, const v8::Local<v8::Context> &localContext) const {
+  v8::EscapableHandleScope escapeHandleScope(isolate);
+  auto checkedCode = v8::String::NewFromUtf8(isolate, source.c_str()).ToLocalChecked();
+  auto script = v8::Script::Compile(localContext, checkedCode).ToLocalChecked();
+  v8::TryCatch tryCatch(isolate);
+  auto result = script->Run(localContext);
   if (result.IsEmpty()) {
-    v8::String::Utf8Value exception(_isolate, try_catch.Exception());
-    std::string what(*exception);
-    std::cerr << what << std::endl;
+    std::cerr << "Running Script has unhandled exception" << std::endl;
+    std::cerr << *v8::String::Utf8Value(isolate, tryCatch.Exception()) << std::endl;
     exit(PROCESSING_ERROR);
   }
-  return handle_scope.Escape(result.ToLocalChecked());
+  return escapeHandleScope.Escape(result.ToLocalChecked());
 }
 
-void KatexHandler::_escape(std::string &code) {
+void KatexHandler::escape(std::string &code) {
   static std::vector<std::string> escapeReplacements = {R"(\\)", R"(\')"};
-  static std::vector<std::regex> escapeFilters = {std::regex("\\\\"), std::regex("\\'")};
+  static std::vector<std::regex> escapeFilters = {std::regex("\\\\"), std::regex("'")};
   size_t len = escapeFilters.size();
   for (size_t i = 0; i < len; ++i)
     code = std::regex_replace(code, escapeFilters[i], escapeReplacements[i]);
 }
 
-std::string KatexHandler::preprocess(const std::string &text) {
-  v8::Isolate::Scope isolate_scope(_isolate);
-  v8::HandleScope handle_scope(_isolate);
-  auto context = v8::Local<v8::Context>::New(_isolate,
-                                             _persistent_context);
-  v8::Context::Scope context_scope(context);
-  std::string code = "var text = '" + text + "'";
-  code += KATEX_NORMALIZE;//TODO: ADD NORMALIZE STRING AFTER TESTING
-  v8::String::Utf8Value value(_isolate, _run(code, context));
-  return {*value};
+std::string KatexHandler::normalize(const std::string &text) {
+  std::string code = "normalize('" + text + "');";
+  v8::Locker locker(isolate);
+  v8::Isolate::Scope isolate_scope(isolate);
+  v8::HandleScope handleScope(isolate);
+  v8::Local<v8::Context> localContext = v8::Local<v8::Context>::New(isolate, context);
+  v8::Context::Scope context_scope(localContext);
+  v8::Local<v8::Value> returnVal = run(code, localContext);
+  v8::String::Utf8Value value(isolate, returnVal);
+  std::string strVal{*value};
+  return strVal.find("Error:") == std::string::npos ? strVal : "";
 }
 
-void OCRUtils::normalizeLatex(const std::filesystem::path &file) {
-  static KatexHandler katex;
-  std::ifstream texInStream(file.generic_string());
-  std::string texContent;
+void replaceAll(std::string &str, const std::string &match, const std::string &replacement) {
+  size_t start_pos = 0;
+  while ((start_pos = str.find(match, start_pos)) != std::string::npos) {
+    str.replace(start_pos, match.size(), replacement);
+    start_pos += replacement.size();
+  }
+}
+
+void KatexHandler::replaceUnsupported(std::string &str) {
+  static std::vector<boost::regex> regex = {boost::regex("boldmath"), boost::regex(R"(\\(p?matrix)([{]((?>[^{}]+|(?2))*)[}]))")};
+  static std::vector<std::string> replacement = {"bold", R"(\\begin\{$1\}$3\\end{$1})"};
+
+  size_t numRegex = regex.size();
+  for (size_t i = 0; i < numRegex; ++i)
+    str = boost::regex_replace(str, regex[i], replacement[i]);
+}
+
+void KatexHandler::lineCleanup(std::string &line) {
+  replaceAll(line, "\r", "");
+  if (line[0] == '%')
+    line = line.substr(1, line.size() - 2);
+  line = line.substr(0, line.find('%'));
+  replaceAll(line, "\\~", " ");
+  for (int i = 0; i < 300; ++i) {
+    size_t idx = line.find("\\>");
+    if (idx != std::string::npos)
+      line.replace(idx, 2, " ");
+    idx = line.find('$');
+    if (idx != std::string::npos)
+      line.replace(idx, 1, " ");
+    static std::regex labelRegex(R"(\\label\{.*?\})");
+    line = std::regex_replace(line, labelRegex, "", std::regex_constants::format_first_only);
+  }
+
+  if (line.find("matrix") != std::string::npos && line.find("cases") != std::string::npos &&
+      line.find("array") != std::string::npos && line.find("begin") != std::string::npos) {
+    for (int i = 0; i < 300; ++i)
+      line.replace(line.find("\\\\"), 2, "\\,");
+  }
+  line += " ";
+  for (int i = 0; i < 300; ++i) {
+    size_t idx = line.find("{\\rm");
+    if (idx != std::string::npos)
+      line.replace(idx, 4, "\\mathrm{");
+    idx = line.find("{ \\rm");
+    if (idx != std::string::npos)
+      line.replace(idx, 4, "\\mathrm{");
+    idx = line.find("\\rm{");
+    if (idx != std::string::npos)
+      line.replace(idx, 4, "\\mathrm{");
+  }
+}
+
+void OCRUtils::normalizeLatex(const std::filesystem::path &inFile, const std::filesystem::path &outFile) {
+  std::ifstream texInStream(inFile);
+  std::ofstream texOutStream(outFile);
   std::string line;
   static std::regex formatting(R"((hskip|hspace)(.*?)(cm|in|pt|mm|em))");
-  while (std::getline(texInStream, line)) {
-    texContent += std::regex_replace(line, formatting, "");
-    texContent += ' ';
+  static std::regex tabCleanup("\\t");
+  static std::regex spaceCleanup(" {2,}");
+  static std::regex startEndCleanup("^ +| +$");
+  for (int lineCounter = 0; std::getline(texInStream, line); ++lineCounter) {
+    line = std::regex_replace(line, formatting, "");
+    line = std::regex_replace(line, tabCleanup, " ");
+    KatexHandler::lineCleanup(line);
+    KatexHandler::replaceUnsupported(line);
+    KatexHandler::escape(line);
+    line = std::regex_replace(line, spaceCleanup, " ");
+    line = std::regex_replace(line, startEndCleanup, "");
+    line = katex.normalize(line);
+    texOutStream << line << std::endl;
+    //std::cout << "Completed line #" << lineCounter << std::endl;
   }
-  katex._escape(texContent);
-  texContent = "<START>" + katex.preprocess(texContent) + "<END>";
-  std::ofstream texOutStream(file.generic_string());
-  texOutStream << texContent;
 }
 
-std::unordered_map<std::string, int> OCRUtils::getVocabMap(const std::filesystem::path &dataDirectory) {
-  std::filesystem::path vocabFile("../models/vocab.txt");
+std::unordered_map<std::string, int> OCRUtils::getVocab(const std::filesystem::path &dataDirectory) {
+  std::filesystem::path vocabFile(dataDirectory / "vocab.txt");
   std::unordered_map<std::string, int> vocab;
-  std::string token;
-  int tokenId = -1;
-  if (std::filesystem::exists(vocabFile)) {
-    std::ifstream vocabInStream(vocabFile.generic_string());
-    while (vocabInStream >> token) {
-      if (vocab.find(token) == vocab.end())
-        vocab.insert(std::make_pair(token, ++tokenId));
-    }
+  if (!exists(vocabFile)) {
+    std::cerr << "Missing vocab file. Run preprocess first" << std::endl;
+    exit(READ_ERROR);
   }
-  if (dataDirectory.empty())
-    return vocab.empty() ? std::unordered_map<std::string, int>({{"<START>", 0}, {"<END>", 0}}) : vocab;
-  for (const auto &entry: std::filesystem::directory_iterator(dataDirectory)) {
-    std::string fileStr = entry.path().generic_string();
-    fileStr = fileStr.substr(0, fileStr.rfind('.'));
-    fileStr += ".tex";
-    std::filesystem::path file(fileStr);
-    normalizeLatex(file);
-    std::ifstream curTexStream(file.generic_string());
-    while (curTexStream >> token) {
-      if (vocab.find(token) == vocab.end())
-        vocab.insert(std::make_pair(token, ++tokenId));
-    }
-  }
-  std::ofstream vocabOutStream(vocabFile.generic_string());
-  std::unordered_map<std::string, int>::const_iterator itr;
-  for (itr = vocab.begin(); itr != vocab.end(); ++itr)
-    vocabOutStream << itr->first << std::endl;
+  std::ifstream vocabStream(vocabFile);
+  std::string word;
+  int count;
+  while (vocabStream >> word >> count)
+    vocab[word] = count;
   return vocab;
 }
 
 torch::Tensor OCRUtils::toTensor(const std::string &str) {
   size_t len = str.size();
-  torch::Tensor tensor = torch::empty(static_cast<int64_t>(len + 1), torch::TensorOptions(torch::kInt8).device(torch::kCUDA));
+  torch::Tensor tensor = torch::empty(static_cast<int64_t>(len + 1),
+                                      torch::TensorOptions(torch::kInt8).device(torch::kCUDA));
   int i;
   for (i = 0; i < len; ++i)
     tensor[i] = str[i];
@@ -157,7 +546,7 @@ std::vector<std::string> OCRUtils::toString(const torch::Tensor &tensor) {
 std::vector<cv::cuda::GpuMat> OCRUtils::toMat(const torch::Tensor &tensor, bool isNormalized) {
   std::vector<cv::cuda::GpuMat> mats;
   int64_t batchSize = tensor.size(0);
-  for(int64_t i = 0; i < batchSize; ++i) {
+  for (int64_t i = 0; i < batchSize; ++i) {
     torch::Tensor imageTensor = tensor[i].permute({1, 2, 0});
     if (isNormalized)
       imageTensor = imageTensor.mul_(255);
@@ -174,7 +563,8 @@ torch::Tensor ImageUtils::toTensor(const cv::cuda::GpuMat &matrix, torch::Scalar
     exit(INVALID_PARAMETER);
   }
   auto options = torch::TensorOptions().dtype(size).device(torch::kCUDA);
-  return torch::from_blob(matrix.data, {1, static_cast<int64_t>(channels), static_cast<int64_t>(matrix.rows), static_cast<int64_t>(matrix.cols)},
+  return torch::from_blob(matrix.data, {1, static_cast<int64_t>(channels), static_cast<int64_t>(matrix.rows),
+                                        static_cast<int64_t>(matrix.cols)},
                           {1, 1, (long long) (matrix.step / sizeof(size)), static_cast<int64_t>(channels)},
                           torch::Deleter(), options).contiguous();
 }
@@ -186,7 +576,8 @@ void ImageUtils::addMargin(const cv::cuda::GpuMat &pixels, cv::Rect_<int> &rect,
   rect.height = rect.y + rect.height + (2 * margin) >= pixels.rows ? pixels.rows - rect.y : rect.height + (2 * margin);
 }
 
-std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator> ImageUtils::getImageBlocks(const cv::cuda::GpuMat &pixels) {
+std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>
+ImageUtils::getImageBlocks(const cv::cuda::GpuMat &pixels) {
   static cv::cuda::GpuMat resized;
   constexpr float confThres = 0.25f;
   constexpr float iouThres = 0.5f;
@@ -196,7 +587,8 @@ std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator> ImageUtils
   float scaleY = (float) pixels.rows / 640;
   cv::cuda::resize(pixels, resized, cv::Size(640, 640), scaleX, scaleY, cv::INTER_CUBIC);
   torch::NoGradGuard no_grad;
-  torch::Tensor imgTensor = toTensor(resized, torch::kByte).contiguous().to(torch::kFloat).div(255).expand({1, 3, -1, -1});
+  torch::Tensor imgTensor = toTensor(resized, torch::kByte).contiguous().to(torch::kFloat).div(255).expand(
+    {1, 3, -1, -1});
   static Classifier imgClassification;
   torch::Tensor prediction = imgClassification.forward(imgTensor).to(torch::kCUDA);
   std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator> imageBlocks;
@@ -279,7 +671,8 @@ std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator> ImageUtils
 
     //cv::rectangle(test, rect, cv::Scalar(255, 255, 255), 3);
 
-    std::pair<cv::Rect, Classifier::ImageType> pair = std::make_pair(rect, static_cast<Classifier::ImageType>(output[i][5].item<int>()));
+    std::pair<cv::Rect, Classifier::ImageType> pair = std::make_pair(rect,
+                                                                     static_cast<Classifier::ImageType>(output[i][5].item<int>()));
     if (rect.area())
       imageBlocks.emplace(pair);
   }
@@ -300,7 +693,10 @@ float ImageUtils::getSkewAngle(const cv::cuda::GpuMat &pixels, const Classifier:
     return bbox.angle;
   } else {
     static cv::Ptr<cv::cuda::CannyEdgeDetector> cannyDetector = cv::cuda::createCannyEdgeDetector(85, 255);
-    static cv::Ptr<cv::cuda::HoughSegmentDetector> segmentDetector = cv::cuda::createHoughSegmentDetector(1, CV_PI / 180, 0, 20, 4096, 40);
+    static cv::Ptr<cv::cuda::HoughSegmentDetector> segmentDetector = cv::cuda::createHoughSegmentDetector(1,
+                                                                                                          CV_PI / 180,
+                                                                                                          0, 20, 4096,
+                                                                                                          40);
     static cv::cuda::GpuMat edges;
     static cv::cuda::GpuMat lines;
     cannyDetector->detect(pixels, edges);
@@ -316,8 +712,10 @@ float ImageUtils::getSkewAngle(const cv::cuda::GpuMat &pixels, const Classifier:
     float rotationAngle = 0;
     cv::Mat test(edges);
     for (unsigned i = 0; i < lines.cols; ++i) {
-      line(test, cv::Point(linesVec[i][0], linesVec[i][1]), cv::Point(linesVec[i][2], linesVec[i][3]), cv::Scalar(255, 255, 255));
-      rotationAngle += (float) (atan2((double) linesVec[i][3] - linesVec[i][1], (double) linesVec[i][2] - linesVec[i][0]));
+      line(test, cv::Point(linesVec[i][0], linesVec[i][1]), cv::Point(linesVec[i][2], linesVec[i][3]),
+           cv::Scalar(255, 255, 255));
+      rotationAngle += (float) (atan2((double) linesVec[i][3] - linesVec[i][1],
+                                      (double) linesVec[i][2] - linesVec[i][0]));
     }
     return (float) ((rotationAngle / (float) lines.cols) * 180. / CV_PI);
   }
@@ -325,7 +723,8 @@ float ImageUtils::getSkewAngle(const cv::cuda::GpuMat &pixels, const Classifier:
 
 void ImageUtils::rotate(cv::cuda::GpuMat &pixels, float degree) {
   static cv::cuda::GpuMat rotated;
-  cv::cuda::warpAffine(pixels, rotated, cv::getRotationMatrix2D(cv::Point2f((float) ((pixels.cols - 1) / 2.0), (float) ((pixels.rows - 1) / 2.0)), degree, 1.0),
+  cv::cuda::warpAffine(pixels, rotated, cv::getRotationMatrix2D(
+                         cv::Point2f((float) ((pixels.cols - 1) / 2.0), (float) ((pixels.rows - 1) / 2.0)), degree, 1.0),
                        pixels.size());
   pixels = rotated;
 }
@@ -335,7 +734,9 @@ void ImageUtils::equalize(cv::cuda::GpuMat &pixels) {
 }
 
 void ImageUtils::denoise(cv::cuda::GpuMat &pixels) {
-  static cv::Ptr<cv::cuda::Filter> denoiseFilter = cv::cuda::createMorphologyFilter(cv::MORPH_OPEN, CV_8UC1, cv::getStructuringElement(cv::MORPH_RECT, cv::Size(2, 1)));
+  static cv::Ptr<cv::cuda::Filter> denoiseFilter = cv::cuda::createMorphologyFilter(cv::MORPH_OPEN, CV_8UC1,
+                                                                                    cv::getStructuringElement(
+                                                                                      cv::MORPH_RECT, cv::Size(2, 1)));
   denoiseFilter->apply(pixels, pixels);
 }
 
@@ -357,8 +758,12 @@ void ImageUtils::threshold(cv::cuda::GpuMat &pixels) {
 }
 
 GhostscriptHandler::GhostscriptHandler(std::filesystem::path outputFileDirectory,
-                                       const std::variant<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>,
-                                                          std::function<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(cv::cuda::GpuMat &)>> &callback) : callback(callback), ioContext(), asyncPipe(ioContext), outputFileDirectory(std::move(outputFileDirectory)), outputFormat("^Page [0-9]+\n$"), pageNum(0) {
+                                       const std::variant<std::function<void(cv::cuda::GpuMat &,
+                                                                             const std::filesystem::path &)>,
+                                         std::function<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(
+                                           cv::cuda::GpuMat &)>> &callback) : callback(callback), ioContext(),
+                                                                              asyncPipe(ioContext), outputFileDirectory(
+    std::move(outputFileDirectory)), outputFormat("^Page [0-9]+\n$"), pageNum(0) {
   if (std::holds_alternative<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>>(callback))
     callbackType = CallbackType::LATEX;
   else
@@ -380,9 +785,14 @@ void GhostscriptHandler::run(const std::filesystem::path &inputFilePath) {
   fileName = inputFilePath.stem();
   outputPrefix /= fileName;
 
-  process = boost::process::child("ghostscript -sDEVICE=tifflzw -sOutputFile=" + outputPrefix.generic_string() + "_page%d.tiff -dTextAlphaBits=4 -dGraphicsAlphaBits=4 -dDITHER=300 -dUseTrimBox -dBATCH -dSAFER -dNOPAUSE " + inputFilePath.generic_string(),
-                                  boost::process::std_in.close(), boost::process::std_out > asyncPipe, boost::process::std_err > stderr, ioContext);
-  boost::asio::async_read_until(asyncPipe, buffer, '\n', boost::bind(&GhostscriptHandler::processOutput, this, boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred));
+  process = boost::process::child("ghostscript -sDEVICE=tifflzw -sOutputFile=" + outputPrefix.generic_string() +
+                                  "_page%d.tiff -dTextAlphaBits=4 -dGraphicsAlphaBits=4 -dDITHER=300 -dUseTrimBox -dBATCH -dSAFER -dNOPAUSE " +
+                                  inputFilePath.generic_string(),
+                                  boost::process::std_in.close(), boost::process::std_out > asyncPipe,
+                                  boost::process::std_err > stderr, ioContext);
+  boost::asio::async_read_until(asyncPipe, buffer, '\n',
+                                boost::bind(&GhostscriptHandler::processOutput, this, boost::asio::placeholders::error,
+                                            boost::asio::placeholders::bytes_transferred));
   ioContext.run();
 }
 
@@ -397,7 +807,9 @@ void GhostscriptHandler::processOutput(const boost::system::error_code &ec, std:
   buffer.consume(size);
   if (std::regex_match(line, outputFormat))
     processOutput();
-  boost::asio::async_read_until(asyncPipe, buffer, '\n', boost::bind(&GhostscriptHandler::processOutput, this, boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred));
+  boost::asio::async_read_until(asyncPipe, buffer, '\n',
+                                boost::bind(&GhostscriptHandler::processOutput, this, boost::asio::placeholders::error,
+                                            boost::asio::placeholders::bytes_transferred));
 }
 
 void GhostscriptHandler::processOutput() {
@@ -414,14 +826,16 @@ void GhostscriptHandler::processOutput() {
       exit(ALLOC_ERROR);
     }
     if (callbackType == CallbackType::LATEX) {
-      std::get<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>>(callback)(curImg, outputFileDirectory);
+      std::get<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>>(callback)(curImg,
+                                                                                                 outputFileDirectory);
     } else {
       std::filesystem::path outputFilePath = outputFileDirectory;
       outputFilePath /= fileName;
       outputFilePath += "_page";
       outputFilePath += std::to_string(pageNum);
       outputFilePath += ".png";
-      std::get<std::function<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(cv::cuda::GpuMat &)>>(callback)(curImg);
+      std::get<std::function<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(
+        cv::cuda::GpuMat &)>>(callback)(curImg);
       cv::cuda::resize(curImg, curImg, cv::Size(640, 640), cv::INTER_CUBIC);
       cv::Mat out(curImg);
       cv::imwrite(outputFilePath.generic_string(), out);
@@ -436,7 +850,10 @@ int GhostscriptHandler::done() {
   return process.exit_code();
 }
 
-void getPDFImages(const std::filesystem::path &inputFilePath, const std::filesystem::path &outputFileDirectory, const std::variant<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>, std::function<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(cv::cuda::GpuMat &)>> &callback) {
+void getPDFImages(const std::filesystem::path &inputFilePath, const std::filesystem::path &outputFileDirectory,
+                  const std::variant<std::function<void(cv::cuda::GpuMat &,
+                                                        const std::filesystem::path &)>, std::function<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(
+                    cv::cuda::GpuMat &)>> &callback) {
   GhostscriptHandler ghostscriptHandler(outputFileDirectory, callback);
   //BENCHMARK
   //auto startTime = std::chrono::high_resolution_clock::now();

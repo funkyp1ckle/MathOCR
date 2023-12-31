@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.25)
 project(MathOCR)
 
+if(POLICY CMP0146)
+    cmake_policy(SET CMP0146 OLD)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
@@ -13,22 +17,15 @@ list(APPEND CMAKE_CXX_FLAGS ${TORCH_CXX_FLAGS})
 
 set(GHOSTSCRIPT_ROOT ${CMAKE_SOURCE_DIR}/ghostscript)
 set(WKHTMLTOX_ROOT ${CMAKE_SOURCE_DIR}/wkhtmltox)
-set(V8_ROOT ${CMAKE_SOURCE_DIR}/v8)
+set(NODEJS_ROOT ${CMAKE_SOURCE_DIR}/nodejs)
 set(TORCH_ROOT ${Torch_DIR}/../../..)
 set(TESSERACT_ROOT ${CMAKE_SOURCE_DIR}/tesseract)
 
 set(WKHTMLTOX_LIBRARIES ${WKHTMLTOX_ROOT}/lib/libwkhtmltox.a)
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    set(V8_LINK_LIBRARIES ${V8_ROOT}/lib/debug/v8.dll.lib
-            ${V8_ROOT}/lib/debug/v8_libbase.dll.lib
-            ${V8_ROOT}/lib/debug/v8_libplatform.dll.lib)
-    set(V8_RUNTIME_LIBRARIES ${V8_ROOT}/lib/debug/v8.dll
-            ${V8_ROOT}/lib/debug/v8_libbase.dll
-            ${V8_ROOT}/lib/debug/v8_libplatform.dll
-            ${V8_ROOT}/lib/debug/icuuc.dll
-            ${V8_ROOT}/lib/debug/icui18n.dll
-            ${V8_ROOT}/lib/debug/zlib.dll)
+    set(NODEJS_LINK_LIBRARY ${NODEJS_ROOT}/lib/debug/libnode.lib)
+    set(NODEJS_RUNTIME_LIBRARY ${NODEJS_ROOT}/lib/debug/libnode.dll)
     set(OpenCV_LINK_LIBRARIES ${OpenCV_DIR}/opencv_core460d.lib
             ${OpenCV_DIR}/opencv_imgcodecs460d.lib
             ${OpenCV_DIR}/opencv_imgproc460d.lib
@@ -83,15 +80,8 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
             ${TESSERACT_ROOT}/lib/debug/libsharpyuv.dll)
     set(TESSERACT_LINK_LIBRARIES ${TESSERACT_ROOT}/lib/debug/tesseract53d.lib)
 else()
-    set(V8_LINK_LIBRARIES ${V8_ROOT}/lib/release/v8.dll.lib
-            ${V8_ROOT}/lib/release/v8_libbase.dll.lib
-            ${V8_ROOT}/lib/release/v8_libplatform.dll.lib)
-    set(V8_RUNTIME_LIBRARIES ${V8_ROOT}/lib/release/v8.dll
-            ${V8_ROOT}/lib/release/v8_libbase.dll
-            ${V8_ROOT}/lib/release/v8_libplatform.dll
-            ${V8_ROOT}/lib/release/icuuc.dll
-            ${V8_ROOT}/lib/release/icui18n.dll
-            ${V8_ROOT}/lib/release/zlib.dll)
+    set(NODEJS_LINK_LIBRARY ${NODEJS_ROOT}/lib/release/libnode.lib)
+    set(NODEJS_RUNTIME_LIBRARY ${NODEJS_ROOT}/lib/release/libnode.dll)
     set(OpenCV_LINK_LIBRARIES ${OpenCV_DIR}/opencv_core460.lib
             ${OpenCV_DIR}/opencv_imgcodecs460.lib
             ${OpenCV_DIR}/opencv_imgproc460.lib
@@ -148,15 +138,15 @@ else()
     set(TESSERACT_LINK_LIBRARIES ${TESSERACT_ROOT}/lib/release/tesseract53.lib)
 endif()
 
-add_executable(MathOCR main.cpp utils.cpp OCREngine.cpp)
+add_executable(MathOCR main.cpp OCREngine.cpp
+        utils.cpp)
 
-target_include_directories(MathOCR PUBLIC ${OpenCV_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS} ${V8_ROOT} ${V8_ROOT}/include ${WKHTMLTOX_ROOT}/include ${TESSERACT_ROOT}/include)
-target_compile_definitions(MathOCR PUBLIC V8_ENABLE_SANDBOX V8_COMPRESS_POINTERS _WIN32_WINNT=0x0601)
-target_link_libraries(MathOCR PUBLIC ${TORCH_LIBRARIES} ${Boost_LIBRARIES} ${OpenCV_LINK_LIBRARIES} ${V8_LINK_LIBRARIES} ${WKHTMLTOX_LIBRARIES} ${TESSERACT_LINK_LIBRARIES})
+target_include_directories(MathOCR PUBLIC ${OpenCV_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS} ${NODEJS_ROOT}/include ${WKHTMLTOX_ROOT}/include ${TESSERACT_ROOT}/include)
+target_link_libraries(MathOCR PUBLIC ${TORCH_LIBRARIES} ${Boost_LIBRARIES} ${OpenCV_LINK_LIBRARIES} ${NODEJS_LINK_LIBRARY} ${WKHTMLTOX_LIBRARIES} ${TESSERACT_LINK_LIBRARIES})
 
 add_custom_command(TARGET MathOCR POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${OpenCV_RUNTIME_LIBRARIES}
-        ${V8_RUNTIME_LIBRARIES}
+        ${NODEJS_RUNTIME_LIBRARY}
         ${TORCH_RUNTIME_LIBRARIES}
         ${WKHTMLTOX_ROOT}/lib/wkhtmltox.dll
         ${GHOSTSCRIPT_ROOT}/ghostscript.exe ${GHOSTSCRIPT_ROOT}/gsdll64.dll
@@ -164,3 +154,5 @@ add_custom_command(TARGET MathOCR POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if
         ${TESSERACT_ROOT}/tessdata/eng.traineddata
         ${CMAKE_SOURCE_DIR}/models/classify.torchscript
         $<TARGET_FILE_DIR:MathOCR>)
+
+add_custom_command(TARGET MathOCR POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_LIST_DIR}/node_modules ${CMAKE_CURRENT_BINARY_DIR}/node_modules)

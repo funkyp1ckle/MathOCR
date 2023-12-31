@@ -12,7 +12,7 @@ Converts PDFs and images into tex
 - [OpenCV](https://github.com/opencv/opencv) with [Contrib(for CUDA)](https://github.com/opencv/opencv_contrib)
 - [Ghostscript](https://ghostscript.com/releases/gsdnld.html)
 - [Katex](https://github.com/KaTeX/KaTeX)
-- [v8 JS Engine](https://github.com/v8/v8)
+- [NodeJS](https://github.com/nodejs/node)
 - [wkhtmltox](https://wkhtmltopdf.org/downloads.html)
 - [Tesseract](https://github.com/tesseract-ocr/tesseract)
 
@@ -27,6 +27,6 @@ Converts PDFs and images into tex
 ### Usage
 ```
 MathOCR train [dataDirectory] [epochs] [learningRate]
-MathOCR preprocess [inputFile] [outputDir] [deskew]
+MathOCR normalize [inputFile] [outputDir] [deskew]
 MathOCR [inputFile] [outputDir]
 ```

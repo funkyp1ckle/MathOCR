@@ -15,7 +15,7 @@ const std::string VERSION = "0.1";
 Options settings;
 
 void printHelp() {
-  std::cout << "usage: MathOCR [-v | --version]\n[-h | --help]\n[PDF or IMAGE PATH] [OUTPUT DIRECTORY]\npreprocess [PDF OR IMAGE PATH]\ntrain [dataFolder][epochs][learningRate]" << std::endl;
+  std::cout << "usage: MathOCR [-v | --version]\n[-h | --help]\n[PDF or IMAGE PATH] [OUTPUT DIRECTORY]\nnormalize [PDF OR IMAGE PATH]\ntrain [dataFolder][epochs][learningRate]" << std::endl;
 }
 
 std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator> preprocess(cv::cuda::GpuMat &pixels) {
@@ -26,8 +26,8 @@ std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator> preprocess
   std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator> imageBlocks = ImageUtils::getImageBlocks(pixels);
   if (settings.deskew) {
     float skewSum = 0;
-    for (auto itr = imageBlocks.begin(); itr != imageBlocks.end(); ++itr)
-      skewSum += ImageUtils::getSkewAngle(pixels(itr->first), itr->second);
+    for (auto & imageBlock : imageBlocks)
+      skewSum += ImageUtils::getSkewAngle(pixels(imageBlock.first), imageBlock.second);
     ImageUtils::rotate(pixels, skewSum / (float) imageBlocks.size());
   }
   return imageBlocks;
@@ -66,17 +66,9 @@ int main(int argc, char **argv) {
   }
 
   std::string argOne(argv[1]);
-  size_t argOneLen = argOne.size();
-  int i;
-  for (i = 0; i < argOneLen; ++i) {
-    if (!isalpha(argOne[i]))
-      continue;
-    break;
-  }
-  argOne = argOne.substr(i);
-  if (argOne == "h" || argOne == "help") {
+  if (argOne == "-h" || argOne == "--help") {
     printHelp();
-  } else if (argOne == "v" || argOne == "version") {
+  } else if (argOne == "-v" || argOne == "--version") {
     std::cout << "MathOCR version: " << VERSION << std::endl;
   } else if (argOne == "train") {
     std::filesystem::path dataDirectory(argv[2]);
@@ -87,17 +79,58 @@ int main(int argc, char **argv) {
     LatexOCR::DataSet dataset(dataDirectory, LatexOCR::DataSet::OCRMode::TRAIN);
     latexOCR->train(dataset, batchSize, epoch, learningRate);
     latexOCR->exportWeights("../models/ocr.pt");
-  } else if (argOne == "preprocess") {
+  } else if (argOne == "normalize") {
     std::filesystem::path inputFilePath(argv[2]);
-    std::filesystem::path outputDirectory(argv[3]);
-    settings.deskew = std::stoi(argv[4]) != 0;
-    std::filesystem::path fileType = inputFilePath.extension();
-    if(fileType == ".pdf") {
-      std::function<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(cv::cuda::GpuMat &)> bindedCallback = std::bind(static_cast<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(&)(cv::cuda::GpuMat &)>(preprocess), std::placeholders::_1);
-      getPDFImages(inputFilePath, outputDirectory, bindedCallback);
-    } else {
-      std::cerr << "invalid input format" << std::endl;
+    std::string mode(argv[3]);
+
+    if(mode != "images" && mode != "vocab" && mode != "both") {
+      std::cerr << "Invalid normalization mode: " << mode << std::endl;
       exit(INVALID_PARAMETER);
+    }
+
+    if(mode == "images" || mode == "both") {
+      std::filesystem::path outputDirectory = inputFilePath / "formula_images";
+      for(const auto& item : std::filesystem::directory_iterator(outputDirectory)) {
+        if(item.is_regular_file()) {
+          std::filesystem::path fileType = inputFilePath.extension();
+          if(fileType == ".jpg" || fileType == ".png" || fileType == ".tiff") {
+            cv::cuda::GpuMat pixels(cv::imread(item.path().generic_string()));
+            ImageUtils::equalize(pixels);
+            ImageUtils::threshold(pixels);
+            ImageUtils::crop(pixels);
+            cv::Mat out;
+            pixels.download(out);
+            cv::imwrite(item.path().generic_string(), out);
+          } else {
+            std::cerr << "invalid input format: " << fileType << std::endl;
+            exit(INVALID_PARAMETER);
+          }
+        }
+      }
+    }
+
+    if(mode == "vocab" || mode == "both") {
+      std::filesystem::path formulaFile = inputFilePath / "im2latex_formulas.lst";
+      std::filesystem::path formulaNormFile = inputFilePath / "im2latex_formulas.norm.lst";
+      std::filesystem::path vocabFile = inputFilePath / "vocab.txt";
+      OCRUtils::normalizeLatex(formulaFile, formulaNormFile);
+
+      std::unordered_map<std::string, int> freqMap;
+      std::string curToken;
+      std::ifstream formulaStream(formulaNormFile);
+      while (formulaStream >> curToken)
+        ++freqMap[curToken];
+
+      std::vector<std::pair<std::string, int>> vocab(freqMap.begin(), freqMap.end());
+      std::sort(vocab.begin(), vocab.end(), [&freqMap](const std::pair<std::string, int>& p1, const std::pair<std::string, int>& p2) -> bool {
+        return freqMap[p1.first] > freqMap[p2.first];
+      });
+
+      std::ofstream vocabStream(vocabFile);
+      size_t len = vocab.size();
+      for (size_t i = 0; i < len; ++i)
+        if(vocab[i].second >= ((float)len * 0.01)) // CAN CHANGE THRESHOLD
+          vocabStream << vocab[i].first << " " << vocab[i].second << std::endl;
     }
   } else {
     if (argc < 3) {

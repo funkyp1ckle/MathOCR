@@ -52,49 +52,49 @@ namespace LatexOCR {
 
   static torch::Device device(getDevice());
 
+  class FeedForwardImpl : public torch::nn::Module {
+  public:
+    FeedForwardImpl(int64_t dim, int64_t hiddenDim);
+
+    torch::Tensor forward(const torch::Tensor &input);
+
+  private:
+    torch::nn::Sequential net;
+  };
+
+  TORCH_MODULE(FeedForward);
+
+  class AttentionImpl : public torch::nn::Module {
+  public:
+    AttentionImpl(int64_t dim, int64_t heads, int64_t dimHead);
+
+    torch::Tensor forward(torch::Tensor input);
+
+  private:
+    int64_t heads;
+    float scale;
+    torch::nn::LayerNorm norm{nullptr};
+    torch::nn::Softmax attend{nullptr};
+    torch::nn::Linear toQkv{nullptr};
+    torch::nn::Linear toOut{nullptr};
+  };
+
+  TORCH_MODULE(Attention);
+
+  class TransformerImpl : public torch::nn::Module {
+  public:
+    TransformerImpl(int64_t dim, int64_t depth, int64_t heads, int64_t dimHeads, int64_t mlpDim);
+
+    torch::Tensor forward(torch::Tensor input);
+
+  private:
+    torch::nn::ModuleList layers;
+  };
+
+  TORCH_MODULE(Transformer);
+
   class EncoderImpl : public torch::nn::Module {
   public:
-    class FeedForwardImpl : public torch::nn::Module {
-    public:
-      FeedForwardImpl(int64_t dim, int64_t hiddenDim);
-
-      torch::Tensor forward(const torch::Tensor &input);
-
-    private:
-      torch::nn::Sequential net;
-    };
-
-    TORCH_MODULE(FeedForward);
-
-    class AttentionImpl : public torch::nn::Module {
-    public:
-      AttentionImpl(int64_t dim, int64_t heads, int64_t dimHead);
-
-      torch::Tensor forward(torch::Tensor input);
-
-    private:
-      int64_t heads;
-      float scale;
-      torch::nn::LayerNorm norm{nullptr};
-      torch::nn::Softmax attend{nullptr};
-      torch::nn::Linear toQkv{nullptr};
-      torch::nn::Linear toOut{nullptr};
-    };
-
-    TORCH_MODULE(Attention);
-
-    class TransformerImpl : public torch::nn::Module {
-    public:
-      TransformerImpl(int64_t dim, int64_t depth, int64_t heads, int64_t dimHeads, int64_t mlpDim);
-
-      torch::Tensor forward(torch::Tensor input);
-
-    private:
-      torch::nn::ModuleList layers;
-    };
-
-    TORCH_MODULE(Transformer);
-
     explicit EncoderImpl(int64_t numClasses);
 
     torch::Tensor forward(torch::Tensor input);
@@ -119,10 +119,12 @@ namespace LatexOCR {
 
   class DecoderImpl : public torch::nn::Module {
   public:
-    DecoderImpl();
+    DecoderImpl(const std::unordered_map<std::string, int>& vocab);
 
     torch::Tensor forward(torch::Tensor input);
   private:
+    std::unordered_map<std::string, int> vocab;
+    Transformer transformer{nullptr};
   };
 
   TORCH_MODULE(Decoder);
@@ -173,11 +175,7 @@ namespace LatexOCR {
     void test(const std::filesystem::path &dataDirectory);
 
     void exportWeights(const std::filesystem::path &outputPath);
-
   private:
-    std::unordered_map<std::string, int> vocabMap;
-    torch::Device device{nullptr};
-
     Encoder encoder{nullptr};
     Decoder decoder{nullptr};
   };

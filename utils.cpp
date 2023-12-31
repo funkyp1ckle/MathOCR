@@ -20,9 +20,9 @@ KatexHandler::KatexHandler() {
   char *nodeArgsA[] = {(char *) "node"};
   char **nodeArgsP = nodeArgsA;
   nodeArgsP = uv_setup_args(1, nodeArgsP);
-  std::vector<std::string> nodeArgs(nodeArgsP, nodeArgsP + 1);
+  std::vector <std::string> nodeArgs(nodeArgsP, nodeArgsP + 1);
 
-  std::unique_ptr<node::InitializationResult> result = node::InitializeOncePerProcess(nodeArgs, {
+  std::unique_ptr <node::InitializationResult> result = node::InitializeOncePerProcess(nodeArgs, {
     node::ProcessInitializationFlags::kNoInitializeV8,
     node::ProcessInitializationFlags::kNoInitializeNodeV8Platform
   });
@@ -38,8 +38,8 @@ KatexHandler::KatexHandler() {
   v8::V8::InitializePlatform(platform.get());
   v8::V8::Initialize();
 
-  std::vector<std::string> errors;
-  std::vector<std::string> execArgs;
+  std::vector <std::string> errors;
+  std::vector <std::string> execArgs;
 
   setup = node::CommonEnvironmentSetup::Create(platform.get(), &errors, nodeArgs, execArgs);
   if (!setup) {
@@ -55,8 +55,8 @@ KatexHandler::KatexHandler() {
   v8::HandleScope handleScope(setupIsolate);
   v8::Context::Scope contextScope(setup->context());
 
-  v8::MaybeLocal<v8::Value> scriptReturn = node::LoadEnvironment(env, [&](
-    const node::StartExecutionCallbackInfo &info) -> v8::MaybeLocal<v8::Value> {
+  v8::MaybeLocal <v8::Value> scriptReturn = node::LoadEnvironment(env, [&](
+    const node::StartExecutionCallbackInfo &info) -> v8::MaybeLocal <v8::Value> {
     auto loadKatex = "const publicRequire = require('module').createRequire(process.cwd() + '/');"
                      "globalThis.require = publicRequire;"
                      "const katex = require('katex');"
@@ -364,17 +364,17 @@ KatexHandler::KatexHandler() {
                      "    }"
                      "}";
     v8::HandleScope scope(setupIsolate);
-    v8::Local<v8::Context> setupContext = setupIsolate->GetCurrentContext();
-    v8::Local<v8::Object> globalObject = setupContext->Global();
+    v8::Local <v8::Context> setupContext = setupIsolate->GetCurrentContext();
+    v8::Local <v8::Object> globalObject = setupContext->Global();
 
-    v8::Local<v8::String> requireStr = v8::String::NewFromUtf8(setupIsolate, "require").ToLocalChecked();
+    v8::Local <v8::String> requireStr = v8::String::NewFromUtf8(setupIsolate, "require").ToLocalChecked();
     globalObject->Set(setupContext, requireStr, info.native_require).ToChecked();
-    v8::Local<v8::String> processStr = v8::String::NewFromUtf8(setupIsolate, "process").ToLocalChecked();
+    v8::Local <v8::String> processStr = v8::String::NewFromUtf8(setupIsolate, "process").ToLocalChecked();
     globalObject->Set(setupContext, processStr, info.process_object).ToChecked();
-    v8::Local<v8::String> source = v8::String::NewFromUtf8(setupIsolate, loadKatex,
-                                                           v8::NewStringType::kNormal).ToLocalChecked();
-    v8::Local<v8::Script> depScript = v8::Script::Compile(setupContext, source).ToLocalChecked();
-    v8::Local<v8::Value> result = depScript->Run(setupContext).ToLocalChecked();
+    v8::Local <v8::String> source = v8::String::NewFromUtf8(setupIsolate, loadKatex,
+                                                            v8::NewStringType::kNormal).ToLocalChecked();
+    v8::Local <v8::Script> depScript = v8::Script::Compile(setupContext, source).ToLocalChecked();
+    v8::Local <v8::Value> result = depScript->Run(setupContext).ToLocalChecked();
     return v8::Null(setupIsolate);
   });
 
@@ -393,7 +393,7 @@ KatexHandler::~KatexHandler() {
   node::TearDownOncePerProcess();
 }
 
-v8::Local<v8::Value> KatexHandler::run(const std::string &source, const v8::Local<v8::Context> &localContext) const {
+v8::Local <v8::Value> KatexHandler::run(const std::string &source, const v8::Local <v8::Context> &localContext) const {
   v8::EscapableHandleScope escapeHandleScope(isolate);
   auto checkedCode = v8::String::NewFromUtf8(isolate, source.c_str()).ToLocalChecked();
   auto script = v8::Script::Compile(localContext, checkedCode).ToLocalChecked();
@@ -408,24 +408,40 @@ v8::Local<v8::Value> KatexHandler::run(const std::string &source, const v8::Loca
 }
 
 void KatexHandler::escape(std::string &code) {
-  static std::vector<std::string> escapeReplacements = {R"(\\)", R"(\')"};
-  static std::vector<std::regex> escapeFilters = {std::regex("\\\\"), std::regex("'")};
+  static std::vector <std::string> escapeReplacements = {R"(\\)", R"(\')"};
+  static std::vector <std::regex> escapeFilters = {std::regex("\\\\"), std::regex("'")};
   size_t len = escapeFilters.size();
   for (size_t i = 0; i < len; ++i)
     code = std::regex_replace(code, escapeFilters[i], escapeReplacements[i]);
 }
 
 std::string KatexHandler::normalize(const std::string &text) {
-  std::string code = "normalize('" + text + "');";
   v8::Locker locker(isolate);
-  v8::Isolate::Scope isolate_scope(isolate);
+  v8::Isolate::Scope isolateScope(isolate);
   v8::HandleScope handleScope(isolate);
-  v8::Local<v8::Context> localContext = v8::Local<v8::Context>::New(isolate, context);
-  v8::Context::Scope context_scope(localContext);
-  v8::Local<v8::Value> returnVal = run(code, localContext);
+  v8::Local <v8::Context> localContext = v8::Local<v8::Context>::New(isolate, context);
+  v8::Context::Scope contextScope(localContext);
+  std::string code = "normalize('" + text + "');";
+  v8::Local <v8::Value> returnVal = run(code, localContext);
   v8::String::Utf8Value value(isolate, returnVal);
   std::string strVal{*value};
   return strVal.find("Error:") == std::string::npos ? strVal : "";
+}
+
+std::string KatexHandler::latexToHTML(std::string latex) {
+  v8::Locker locker(isolate);
+  v8::Isolate::Scope isolateScope(isolate);
+  v8::HandleScope handleScope(isolate);
+  v8::Local <v8::Context> localContext = v8::Local<v8::Context>::New(isolate, context);
+  v8::Context::Scope contextScope(localContext);
+  escape(latex);
+  std::string code = "katex.renderToString('" + latex + "', {'displayMode': true});";
+  v8::Local <v8::Value> returnVal = run(code, localContext);
+  v8::String::Utf8Value value(isolate, returnVal);
+  std::string answer = "<!DOCTYPE html>\n<html>\n<head>\n<meta charset='utf-8'/>\n<link rel='stylesheet' type='text/css' href='./katex/dist/katex.css' />\n</head>\n<body>\n";
+  answer += *value;
+  answer += "</body>\n</html>";
+  return answer;
 }
 
 void replaceAll(std::string &str, const std::string &match, const std::string &replacement) {
@@ -437,8 +453,9 @@ void replaceAll(std::string &str, const std::string &match, const std::string &r
 }
 
 void KatexHandler::replaceUnsupported(std::string &str) {
-  static std::vector<boost::regex> regex = {boost::regex("boldmath"), boost::regex(R"(\\(p?matrix)([{]((?>[^{}]+|(?2))*)[}]))")};
-  static std::vector<std::string> replacement = {"bold", R"(\\begin\{$1\}$3\\end{$1})"};
+  static std::vector <boost::regex> regex = {boost::regex("boldmath"),
+                                             boost::regex(R"(\\(p?matrix)([{]((?>[^{}]+|(?2))*)[}]))")};
+  static std::vector <std::string> replacement = {"bold", R"(\\begin\{$1\}$3\\end{$1})"};
 
   size_t numRegex = regex.size();
   for (size_t i = 0; i < numRegex; ++i)
@@ -481,6 +498,40 @@ void KatexHandler::lineCleanup(std::string &line) {
   }
 }
 
+HTMLRenderHandler::HTMLRenderHandler() {
+  if (!wkhtmltoimage_init(true)) {
+    std::cerr << "HTML Renderer Initialization Failed" << std::endl;
+    exit(ENVIRONMENT_ERROR);
+  }
+  settings = wkhtmltoimage_create_global_settings();
+  wkhtmltoimage_set_global_setting(settings, "in", "./temp.html");
+  wkhtmltoimage_set_global_setting(settings, "fmt", "jpeg");
+  char *width = nullptr;
+  char *height = nullptr;
+  wkhtmltoimage_get_global_setting(settings, "crop.width", width, 0);
+  wkhtmltoimage_get_global_setting(settings, "crop.height", height, 0);
+  imgSize.width = std::stoi(width);
+  imgSize.height = std::stoi(height);
+}
+
+HTMLRenderHandler::~HTMLRenderHandler() {
+  wkhtmltoimage_deinit();
+}
+
+cv::Mat HTMLRenderHandler::renderHTML(const std::string &html) {
+  std::ofstream htmlStream("temp.html");
+  htmlStream << html;
+  converter = wkhtmltoimage_create_converter(settings, nullptr);
+  if (!wkhtmltoimage_convert(converter)) {
+    std::cerr << "Error Converting HTML to Image" << std::endl;
+    exit(PROCESSING_ERROR);
+  }
+  const unsigned char *data = nullptr;
+  unsigned long len = wkhtmltoimage_get_output(converter, &data);
+  wkhtmltoimage_destroy_converter(converter);
+  return {imgSize, CV_8UC3, (void *) data};
+}
+
 void OCRUtils::normalizeLatex(const std::filesystem::path &inFile, const std::filesystem::path &outFile) {
   std::ifstream texInStream(inFile);
   std::ofstream texOutStream(outFile);
@@ -501,6 +552,11 @@ void OCRUtils::normalizeLatex(const std::filesystem::path &inFile, const std::fi
     texOutStream << line << std::endl;
     //std::cout << "Completed line #" << lineCounter << std::endl;
   }
+}
+
+void OCRUtils::renderLatex(const std::string &latex) {
+  std::string html = katex.latexToHTML(latex);
+  wkhtml.renderHTML(html);
 }
 
 std::unordered_map<std::string, int> OCRUtils::getVocab(const std::filesystem::path &dataDirectory) {
@@ -529,9 +585,9 @@ torch::Tensor OCRUtils::toTensor(const std::string &str) {
   return tensor;
 }
 
-std::vector<std::string> OCRUtils::toString(const torch::Tensor &tensor) {
+std::vector <std::string> OCRUtils::toString(const torch::Tensor &tensor) {
   int64_t batchSize = tensor.size(0);
-  std::vector<std::string> answer;
+  std::vector <std::string> answer;
   answer.reserve(batchSize);
   for (int64_t i = 0; i < batchSize; ++i) {
     std::string item;
@@ -543,8 +599,8 @@ std::vector<std::string> OCRUtils::toString(const torch::Tensor &tensor) {
   return answer;
 }
 
-std::vector<cv::cuda::GpuMat> OCRUtils::toMat(const torch::Tensor &tensor, bool isNormalized) {
-  std::vector<cv::cuda::GpuMat> mats;
+std::vector <cv::cuda::GpuMat> OCRUtils::toMat(const torch::Tensor &tensor, bool isNormalized) {
+  std::vector <cv::cuda::GpuMat> mats;
   int64_t batchSize = tensor.size(0);
   for (int64_t i = 0; i < batchSize; ++i) {
     torch::Tensor imageTensor = tensor[i].permute({1, 2, 0});
@@ -576,7 +632,7 @@ void ImageUtils::addMargin(const cv::cuda::GpuMat &pixels, cv::Rect_<int> &rect,
   rect.height = rect.y + rect.height + (2 * margin) >= pixels.rows ? pixels.rows - rect.y : rect.height + (2 * margin);
 }
 
-std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>
+std::map <cv::Rect, Classifier::ImageType, Classifier::RectComparator>
 ImageUtils::getImageBlocks(const cv::cuda::GpuMat &pixels) {
   static cv::cuda::GpuMat resized;
   constexpr float confThres = 0.25f;
@@ -591,7 +647,7 @@ ImageUtils::getImageBlocks(const cv::cuda::GpuMat &pixels) {
     {1, 3, -1, -1});
   static Classifier imgClassification;
   torch::Tensor prediction = imgClassification.forward(imgTensor).to(torch::kCUDA);
-  std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator> imageBlocks;
+  std::map <cv::Rect, Classifier::ImageType, Classifier::RectComparator> imageBlocks;
 
   auto conf_mask = prediction.select(2, 4) > confThres;
 
@@ -609,7 +665,7 @@ ImageUtils::getImageBlocks(const cv::cuda::GpuMat &pixels) {
   boxOut.select(1, 2) = boxIn.select(1, 0) + boxIn.select(1, 2).div(2);
   boxOut.select(1, 3) = boxIn.select(1, 1) + boxIn.select(1, 3).div(2);
 
-  std::tuple<torch::Tensor, torch::Tensor> max_tuple = torch::max(prediction.slice(1, 5, prediction.size(1)), 1, true);
+  std::tuple <torch::Tensor, torch::Tensor> max_tuple = torch::max(prediction.slice(1, 5, prediction.size(1)), 1, true);
   prediction = torch::cat({boxOut, std::get<0>(max_tuple), std::get<1>(max_tuple)}, 1);
   prediction = prediction.index_select(0, torch::nonzero(std::get<0>(max_tuple) > confThres).select(1, 0));
   int64_t n = prediction.size(0);
@@ -671,8 +727,8 @@ ImageUtils::getImageBlocks(const cv::cuda::GpuMat &pixels) {
 
     //cv::rectangle(test, rect, cv::Scalar(255, 255, 255), 3);
 
-    std::pair<cv::Rect, Classifier::ImageType> pair = std::make_pair(rect,
-                                                                     static_cast<Classifier::ImageType>(output[i][5].item<int>()));
+    std::pair <cv::Rect, Classifier::ImageType> pair = std::make_pair(rect,
+                                                                      static_cast<Classifier::ImageType>(output[i][5].item<int>()));
     if (rect.area())
       imageBlocks.emplace(pair);
   }
@@ -682,7 +738,7 @@ ImageUtils::getImageBlocks(const cv::cuda::GpuMat &pixels) {
 float ImageUtils::getSkewAngle(const cv::cuda::GpuMat &pixels, const Classifier::ImageType &type) {
   if (type == Classifier::ImageType::TABLE || type == Classifier::ImageType::IMAGE) {
     cv::Mat img(pixels);
-    std::vector<cv::Point> points;
+    std::vector <cv::Point> points;
     cv::Mat_<uchar>::iterator it = img.begin<uchar>();
     cv::Mat_<uchar>::iterator end = img.end<uchar>();
     for (; it != end; ++it)
@@ -692,17 +748,17 @@ float ImageUtils::getSkewAngle(const cv::cuda::GpuMat &pixels, const Classifier:
     cv::RotatedRect bbox = cv::minAreaRect(cv::Mat(points));
     return bbox.angle;
   } else {
-    static cv::Ptr<cv::cuda::CannyEdgeDetector> cannyDetector = cv::cuda::createCannyEdgeDetector(85, 255);
-    static cv::Ptr<cv::cuda::HoughSegmentDetector> segmentDetector = cv::cuda::createHoughSegmentDetector(1,
-                                                                                                          CV_PI / 180,
-                                                                                                          0, 20, 4096,
-                                                                                                          40);
+    static cv::Ptr <cv::cuda::CannyEdgeDetector> cannyDetector = cv::cuda::createCannyEdgeDetector(85, 255);
+    static cv::Ptr <cv::cuda::HoughSegmentDetector> segmentDetector = cv::cuda::createHoughSegmentDetector(1,
+                                                                                                           CV_PI / 180,
+                                                                                                           0, 20, 4096,
+                                                                                                           40);
     static cv::cuda::GpuMat edges;
     static cv::cuda::GpuMat lines;
     cannyDetector->detect(pixels, edges);
     segmentDetector->setMinLineLength((int) (pixels.cols * 0.33));
     segmentDetector->detect(edges, lines);
-    std::vector<cv::Vec4i> linesVec;
+    std::vector <cv::Vec4i> linesVec;
     if (lines.cols == 0) {
       return 0.f;
     }
@@ -734,9 +790,9 @@ void ImageUtils::equalize(cv::cuda::GpuMat &pixels) {
 }
 
 void ImageUtils::denoise(cv::cuda::GpuMat &pixels) {
-  static cv::Ptr<cv::cuda::Filter> denoiseFilter = cv::cuda::createMorphologyFilter(cv::MORPH_OPEN, CV_8UC1,
-                                                                                    cv::getStructuringElement(
-                                                                                      cv::MORPH_RECT, cv::Size(2, 1)));
+  static cv::Ptr <cv::cuda::Filter> denoiseFilter = cv::cuda::createMorphologyFilter(cv::MORPH_OPEN, CV_8UC1,
+                                                                                     cv::getStructuringElement(
+                                                                                       cv::MORPH_RECT, cv::Size(2, 1)));
   denoiseFilter->apply(pixels, pixels);
 }
 
@@ -750,7 +806,7 @@ void ImageUtils::crop(cv::cuda::GpuMat &pixels) {
 }
 
 void ImageUtils::threshold(cv::cuda::GpuMat &pixels) {
-  static cv::Ptr<cv::cuda::Filter> thresholdFilter = cv::cuda::createBoxFilter(CV_8UC1, CV_8UC1, cv::Size(3, 3));
+  static cv::Ptr <cv::cuda::Filter> thresholdFilter = cv::cuda::createBoxFilter(CV_8UC1, CV_8UC1, cv::Size(3, 3));
   static cv::cuda::GpuMat mean;
   thresholdFilter->apply(pixels, mean);
   cv::cuda::subtract(mean, 8, mean);
@@ -758,16 +814,22 @@ void ImageUtils::threshold(cv::cuda::GpuMat &pixels) {
 }
 
 GhostscriptHandler::GhostscriptHandler(std::filesystem::path outputFileDirectory,
-                                       const std::variant<std::function<void(cv::cuda::GpuMat &,
-                                                                             const std::filesystem::path &)>,
-                                         std::function<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(
-                                           cv::cuda::GpuMat &)>> &callback) : callback(callback), ioContext(),
-                                                                              asyncPipe(ioContext), outputFileDirectory(
-    std::move(outputFileDirectory)), outputFormat("^Page [0-9]+\n$"), pageNum(0) {
-  if (std::holds_alternative<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>>(callback))
-    callbackType = CallbackType::LATEX;
+                                       const std::variant< std
+
+::function<
+void(cv::cuda::GpuMat
+&,
+const std::filesystem::path &)>,
+std::function<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(
+  cv::cuda::GpuMat & )>> &callback) :
+
+callback (callback), ioContext(),
+asyncPipe(ioContext), outputFileDirectory(
+  std::move(outputFileDirectory)), outputFormat("^Page [0-9]+\n$"), pageNum(0) {
+  if (std::holds_alternative < std::function < void(cv::cuda::GpuMat & , const std::filesystem::path &)>>(callback))
+  callbackType = CallbackType::LATEX;
   else
-    callbackType = CallbackType::PROCESS;
+  callbackType = CallbackType::PROCESS;
 }
 
 void GhostscriptHandler::run(const std::filesystem::path &inputFilePath) {
@@ -826,16 +888,17 @@ void GhostscriptHandler::processOutput() {
       exit(ALLOC_ERROR);
     }
     if (callbackType == CallbackType::LATEX) {
-      std::get<std::function<void(cv::cuda::GpuMat &, const std::filesystem::path &)>>(callback)(curImg,
-                                                                                                 outputFileDirectory);
+      std::get < std::function < void(cv::cuda::GpuMat & ,
+      const std::filesystem::path &)>>(callback)(curImg,
+                                                 outputFileDirectory);
     } else {
       std::filesystem::path outputFilePath = outputFileDirectory;
       outputFilePath /= fileName;
       outputFilePath += "_page";
       outputFilePath += std::to_string(pageNum);
       outputFilePath += ".png";
-      std::get<std::function<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(
-        cv::cuda::GpuMat &)>>(callback)(curImg);
+      std::get < std::function < std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(
+        cv::cuda::GpuMat & ) >> (callback)(curImg);
       cv::cuda::resize(curImg, curImg, cv::Size(640, 640), cv::INTER_CUBIC);
       cv::Mat out(curImg);
       cv::imwrite(outputFilePath.generic_string(), out);
@@ -851,20 +914,26 @@ int GhostscriptHandler::done() {
 }
 
 void getPDFImages(const std::filesystem::path &inputFilePath, const std::filesystem::path &outputFileDirectory,
-                  const std::variant<std::function<void(cv::cuda::GpuMat &,
-                                                        const std::filesystem::path &)>, std::function<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(
-                    cv::cuda::GpuMat &)>> &callback) {
-  GhostscriptHandler ghostscriptHandler(outputFileDirectory, callback);
-  //BENCHMARK
-  //auto startTime = std::chrono::high_resolution_clock::now();
-  ghostscriptHandler.run(inputFilePath);
-  //BENCHMARK
-  //std::cout << (std::chrono::high_resolution_clock::now() - startTime).count() << std::endl;
-  int returnCode = ghostscriptHandler.done();
-  if (returnCode != 0) {
-    std::cerr << "Ghostscript was unable to parse images from the pdf" << std::endl;
-    exit(returnCode);
-  }
+                  const std::variant< std
+
+::function<
+void(cv::cuda::GpuMat
+&,
+const std::filesystem::path &)>, std::function<std::map<cv::Rect, Classifier::ImageType, Classifier::RectComparator>(
+  cv::cuda::GpuMat & )>> &callback) {
+GhostscriptHandler ghostscriptHandler(outputFileDirectory, callback);
+//BENCHMARK
+//auto startTime = std::chrono::high_resolution_clock::now();
+ghostscriptHandler.
+run(inputFilePath);
+//BENCHMARK
+//std::cout << (std::chrono::high_resolution_clock::now() - startTime).count() << std::endl;
+int returnCode = ghostscriptHandler.done();
+if (returnCode != 0) {
+std::cerr << "Ghostscript was unable to parse images from the pdf" <<
+std::endl;
+exit(returnCode);
+}
 }
 
 int clamp(int n, int lower, int upper) {

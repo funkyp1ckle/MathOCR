@@ -7,6 +7,8 @@
 
 #include "OCREngine.h"
 
+#include <wkhtmltox/image.h>
+
 #include <v8.h>
 #include <libplatform/libplatform.h>
 #include <node.h>
@@ -34,6 +36,7 @@
 #include <variant>
 
 extern const int ALLOC_ERROR;
+extern const int ENVIRONMENT_ERROR;
 
 struct Options {
   bool deskew = false;
@@ -49,6 +52,8 @@ public:
 
   std::string normalize(const std::string &text);
 
+  std::string latexToHTML(std::string latex);
+
   static void escape(std::string &code);
 
   static void lineCleanup(std::string &line);
@@ -56,7 +61,7 @@ public:
   static void replaceUnsupported(std::string &line);
 
 private:
-  v8::Local<v8::Value> run(const std::string &source, const v8::Local<v8::Context>& context) const;
+  v8::Local<v8::Value> run(const std::string &source, const v8::Local<v8::Context> &context) const;
 
   std::unique_ptr<node::MultiIsolatePlatform> platform;
   std::unique_ptr<node::CommonEnvironmentSetup> setup;
@@ -65,19 +70,35 @@ private:
   v8::Global<v8::Context> context;
 };
 
+class HTMLRenderHandler {
+public:
+  HTMLRenderHandler();
+  ~HTMLRenderHandler();
+
+  cv::Mat renderHTML(const std::string &html);
+private:
+  wkhtmltoimage_global_settings *settings;
+  wkhtmltoimage_converter *converter;
+  cv::Size imgSize;
+};
+
 class OCRUtils {
 public:
   static std::vector<cv::cuda::GpuMat> toMat(const torch::Tensor &tensor, bool isNormalized = false);
 
   static void normalizeLatex(const std::filesystem::path &inFile, const std::filesystem::path &outFile);
 
+  static void renderLatex(const std::string &latex);
+
   static std::unordered_map<std::string, int> getVocab(const std::filesystem::path &dataDirectory);
 
   static torch::Tensor toTensor(const std::string &str);
 
   static std::vector<std::string> toString(const torch::Tensor &tensor);
+
 private:
   static inline KatexHandler katex;
+  static inline HTMLRenderHandler wkhtml;
 };
 
 class GhostscriptHandler {
